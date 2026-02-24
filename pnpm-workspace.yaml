@@ -1,0 +1,8 @@
+packages:
+  - "backend"
+  - "frontend"
+onlyBuiltDependencies:
+  - esbuild
+  - msw
+  - vue-demi
+  - msgpackr-extract

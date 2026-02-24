@@ -1,0 +1,150 @@
+# Tiburcio — Claude Code Configuration
+
+RAG-powered onboarding chatbot. Indexes team docs, source code, and conventions into Qdrant, then answers developer questions grounded in the actual codebase. Nightly pipeline reviews merges and generates test suggestions.
+
+## Philosophy
+
+IMPORTANT: These principles guide every decision in this codebase.
+
+- **Maintainability over performance** — always choose the simpler, more readable solution. Code should be obvious to read, easy to change, and simple to delete. If two approaches work, pick the one a junior developer would understand faster.
+- **Simplicity** — fewer moving parts wins. One provider instead of two. Direct function calls instead of wrapper abstractions. If a layer adds no value, delete it. Three lines of direct code is better than one premature abstraction.
+- **Single source of truth** — one place for each concern. `infra.ts` for clients, `schema.ts` for DB structure, `env.ts` for config. Never duplicate definitions.
+- **Consistency across everything** — naming, versions, patterns, and conventions must be uniform across the entire project. If you change something in one place, find and update every other place.
+- **Documentation reflects reality** — if code changes, docs change in the same commit. No stale documentation. Ever. README, CHANGELOG, CONTRIBUTING, standards/ docs, code comments — all must match the current state.
+- **Thoroughness** — no loose ends, no half-done work. Fix the edge cases, handle the error paths, check what happens on restart, think about first boot vs existing setup.
+- **Production-ready** — bulletproof edge cases, self-healing on failure, proper error messages. Think: "what happens if this fails at 3 AM with no one watching?"
+- **Developer experience** — everything should "just work" for someone cloning the repo fresh. Auto-indexing, sensible defaults, clear error messages, default credentials documented.
+- **Senior quality** — write code like a senior engineer shipping to production, not like a tutorial. No TODO comments left behind, no dead code, no commented-out blocks.
+
+## Commands
+
+```bash
+# Development (from root)
+pnpm install                          # install all deps
+docker compose up db redis qdrant -d  # infrastructure only
+pnpm dev                              # backend + frontend dev servers
+
+# Backend (from backend/)
+pnpm test                  # 89 tests, no external deps needed
+pnpm check                 # biome lint + tsc type check
+pnpm build                 # tsc compile to dist/
+pnpm db:migrate            # run Drizzle migrations
+pnpm db:generate           # generate migration from schema changes
+pnpm index:standards       # CLI: index standards/ into Qdrant
+pnpm index:codebase        # CLI: index CODEBASE_PATH into Qdrant
+pnpm index:architecture    # CLI: index architecture + schemas
+
+# Frontend (from frontend/)
+pnpm test                  # 30 tests
+pnpm check                 # biome lint + vue-tsc type check
+pnpm build                 # production build
+
+# Docker (full stack — 6 services)
+docker compose up -d --build   # build and start everything
+docker compose down -v         # wipe all data (clean slate)
+docker compose ps              # check service health
+```
+
+## Architecture
+
+- **Backend**: Hono HTTP server + Mastra AI framework + BullMQ jobs
+- **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
+- **LLM**: OpenRouter (`minimax/minimax-m2.5` — best-in-class function calling via BFCL 76.8)
+- **Embeddings**: OpenRouter (`qwen/qwen3-embedding-8b` on Nebius, 1024 dims, MTEB Code 80.68 SOTA)
+- **Reranking**: Mastra `rerank()` on all 6 RAG tools (LLM-based semantic scoring, 2x over-fetch → rerank)
+- **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
+- **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
+- **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
+- **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
+- **MCP**: stdio transport for Claude Code integration (`backend/src/mcp.ts`)
+
+## Key Patterns
+
+### Single source of truth for infrastructure
+All shared singletons live in `backend/src/mastra/infra.ts`: qdrant client, openrouter client, `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
+
+### Embedding layer separation
+`backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
+
+### Tools import pattern
+Every RAG tool in `backend/src/mastra/tools/` follows:
+```typescript
+import { embedText } from "../../indexer/embed.js";
+import { qdrant } from "../infra.js";
+```
+
+### BullMQ job execution
+Simple indexing jobs (standards, codebase, architecture) call indexer functions directly in `backend/src/jobs/queue.ts`. Only `nightly-review` uses a Mastra workflow (multi-step: reindex → review → test suggestions).
+
+### Drizzle migrations
+Schema lives in `backend/src/db/schema.ts`. Generate migrations with `pnpm db:generate`. Migration files go in `backend/drizzle/`. Never write raw DDL.
+
+### Frontend stores
+- `auth` — httpOnly cookie session (no token in localStorage)
+- `chat` — conversations, messages, SSE streaming
+- `rate-limit` — 429 countdown tracking
+
+## File Layout
+
+```
+backend/src/
+  config/env.ts          # Zod-validated env vars (envSchema exported for tests)
+  config/logger.ts       # Pino logger
+  config/redis.ts        # ioredis client
+  db/schema.ts           # Drizzle schema (users, conversations, messages)
+  db/connection.ts       # postgres driver + drizzle instance
+  db/migrate.ts          # Drizzle migrator
+  indexer/embed.ts       # embedText, embedTexts, toUUID (OpenRouter)
+  indexer/chunker.ts     # language-aware code chunking (Java, TS, Vue, SQL)
+  indexer/rerank.ts      # rerankResults — Mastra LLM-based reranking wrapper
+  indexer/redact.ts      # redactSecrets — strips secrets before sending to APIs
+  indexer/fs.ts          # shared findMarkdownFiles utility
+  indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
+  indexer/index-*.ts     # indexing pipelines per collection
+  mastra/infra.ts        # qdrant + openrouter singletons + ensureCollection
+  mastra/agents/         # chat-agent.ts, code-review-agent.ts
+  mastra/tools/          # 7 RAG tools (search-standards, search-code, etc.)
+  mastra/workflows/      # nightly-review.ts (only workflow)
+  mastra/memory.ts       # semantic recall + working memory config
+  mastra/index.ts        # Mastra instance (agents + workflow + observability)
+  jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
+  middleware/rate-limiter.ts  # global, auth, chat rate limiters
+  routes/auth.ts         # POST /api/auth/login, /register, /refresh, /logout (httpOnly cookies)
+  routes/chat.ts         # POST /api/chat/stream (SSE), GET conversations/messages
+  routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
+  server.ts              # Hono app, middleware stack, startup, shutdown
+  mcp.ts                 # MCP stdio server (7 tools exposed)
+```
+
+## Gotchas
+
+- **env.ts side effect**: Importing `env.ts` triggers `envSchema.parse(process.env)` at module load. In tests, set required env vars in `beforeAll` before dynamic imports.
+- **`.js` extensions in imports**: TypeScript compiles to ESM. All relative imports MUST use `.js` extension (e.g., `import { qdrant } from "../mastra/infra.js"`).
+- **JWT_SECRET min 32 chars**: Zod enforces `.min(32)`. Generate with `openssl rand -base64 32`.
+- **CODEBASE_BRANCH regex**: Only `[a-zA-Z0-9._/-]+` allowed — prevents git argument injection.
+- **Qdrant healthcheck**: Uses `bash -c ':> /dev/tcp/localhost/6333'` because the qdrant image has no curl/wget.
+- **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_PATH` later, restart the backend and `code-chunks` will auto-index.
+- **`.tibignore`**: Place a `.tibignore` file in your `CODEBASE_PATH` root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
+- **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending text to OpenRouter or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
+- **Embedding model migration**: Switching `EMBEDDING_MODEL` auto-drops all Qdrant collections on next startup (dimensions change). Model name stored in Redis as `tiburcio:embedding-model`. Re-indexing is triggered automatically.
+- **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
+- **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
+- **concurrency: 1** on BullMQ worker: indexing jobs run sequentially to avoid overwhelming OpenRouter rate limits.
+- **pino-pretty**: Only available in dev. Production uses JSON logging. If `NODE_ENV` is not set to `production` in Docker, pino-pretty import crashes the container.
+
+## Testing
+
+Tests use Vitest with mocks — no external services needed. Key mock patterns:
+- `vi.mock("../mastra/infra.js")` for qdrant
+- `vi.mock("../indexer/embed.js")` for embedText
+- `vi.mock("../indexer/rerank.js")` for rerankResults (passthrough in tool tests)
+- `vi.mock("../mastra/index.js")` for the Mastra agent
+- Chat tests parse SSE events with a `parseSSE()` helper
+- Auth tests mock Redis for refresh token jti storage
+- Auth tests use real bcrypt (slower but accurate)
+
+Always run `pnpm check && pnpm test` in both backend/ and frontend/ before committing.
+
+## Version
+
+v1.0.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.

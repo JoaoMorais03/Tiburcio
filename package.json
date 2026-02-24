@@ -1,0 +1,10 @@
+{
+  "name": "tiburcio",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r run dev",
+    "build": "pnpm -r run build",
+    "check": "pnpm -r run check",
+    "test": "pnpm -r run test"
+  }
+}

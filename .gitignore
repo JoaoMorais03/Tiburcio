@@ -1,0 +1,32 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+Thumbs.db
+node-certs.pem
+*.tsbuildinfo
+coverage/
+
+# IDE / Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build caches
+.turbo/
+
+# Auto-generated
+frontend/auto-imports.d.ts
+frontend/components.d.ts
+frontend/stats.html
+
+# Claude Code — commit settings.json + CLAUDE.md, ignore local/personal files
+.claude/settings.local.json
+.claude/projects/
+.claude/todos/
+CLAUDE.local.md
