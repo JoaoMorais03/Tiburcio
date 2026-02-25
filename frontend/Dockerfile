@@ -3,8 +3,11 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Optional: corporate proxy CA cert (place node-certs.pem in repo root if needed)
-COPY node-certs.pe[m] /usr/local/share/ca-certificates/
+# Corporate proxy CA cert: inject before any network calls
+COPY node-certs.pe[m] /usr/local/share/ca-certificates/node-certs.pem
+RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
+    cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
+    fi
 ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/node-certs.pem
 
 RUN corepack enable && corepack prepare pnpm@10.30.1 --activate

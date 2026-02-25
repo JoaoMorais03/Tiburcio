@@ -1,12 +1,15 @@
 // indexer/index-codebase.ts — Core logic for indexing the target codebase into Qdrant.
+// v1.1: AST chunking + contextual retrieval + header metadata + BM25 sparse vectors.
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 import { logger } from "../config/logger.js";
 import { redis } from "../config/redis.js";
-import { ensureCollection, qdrant } from "../mastra/infra.js";
+import { ensureCollection, rawQdrant } from "../mastra/infra.js";
+import { textToSparse } from "./bm25.js";
 import { chunkFile } from "./chunker.js";
+import { contextualizeChunks } from "./contextualize.js";
 import { embedTexts, toUUID } from "./embed.js";
 import { getHeadSha } from "./git-diff.js";
 import { redactSecrets } from "./redact.js";
@@ -117,12 +120,13 @@ async function findSourceFiles(
   return files;
 }
 
-function chunkId(filePath: string, startLine: number): string {
-  return toUUID(`${COLLECTION}:${filePath}:${startLine}`);
+function chunkId(repoName: string, filePath: string, startLine: number): string {
+  return toUUID(`${repoName}:${filePath}:${startLine}`);
 }
 
 export async function indexCodebase(
   codebasePath: string,
+  repoName: string,
 ): Promise<{ files: number; chunks: number }> {
   try {
     await stat(codebasePath);
@@ -138,61 +142,142 @@ export async function indexCodebase(
   const sourceFiles = await findSourceFiles(codebasePath, codebasePath, tibignorePatterns);
   if (sourceFiles.length === 0) return { files: 0, chunks: 0 };
 
-  const allChunks: Array<{
+  // --- Chunk all files + generate contextual descriptions ---
+
+  interface IndexChunk {
     content: string;
+    context: string;
     filePath: string;
     language: string;
     layer: string;
     startLine: number;
     endLine: number;
-  }> = [];
+    symbolName: string | null;
+    parentSymbol: string | null;
+    chunkType: string;
+    annotations: string[];
+    chunkIndex: number;
+    totalChunks: number;
+    headerChunkId: string | null;
+  }
+
+  const allChunks: IndexChunk[] = [];
+  let contextFailures = 0;
 
   for (const filePath of sourceFiles) {
     try {
       const content = await readFile(filePath, "utf-8");
       const relPath = relative(codebasePath, filePath);
       const chunks = chunkFile(content, relPath);
-      if (chunks.length > 0) allChunks.push(...chunks);
-    } catch {
-      // skip unreadable files
+      if (chunks.length === 0) continue;
+
+      // Phase 3: Link each chunk to its file's header chunk
+      const headerChunk = chunks.find((c) => c.chunkType === "header");
+      const headerChunkUUID = headerChunk
+        ? chunkId(repoName, relPath, headerChunk.startLine)
+        : null;
+      for (const chunk of chunks) {
+        chunk.headerChunkId = chunk.chunkType === "header" ? null : headerChunkUUID;
+      }
+
+      // Phase 2: Generate contextual descriptions for each chunk
+      let contexts: string[];
+      try {
+        contexts = await contextualizeChunks(content, chunks, relPath, chunks[0].language);
+      } catch (err) {
+        logger.warn({ err, filePath: relPath }, "Contextualization failed, using empty contexts");
+        contexts = chunks.map(() => "");
+      }
+
+      // Track empty contexts (LLM returned nothing or batch failed)
+      contextFailures += contexts.filter((c) => c === "").length;
+
+      for (let i = 0; i < chunks.length; i++) {
+        allChunks.push({ ...chunks[i], context: contexts[i] });
+      }
+    } catch (err) {
+      logger.debug({ path: filePath, err }, "Skipped unreadable file during indexing");
     }
   }
 
-  // Drop and recreate collection to purge stale vectors from deleted/renamed files.
-  // The nightly incremental reindex handles partial updates separately.
+  // Ensure collection exists with sparse vector support, then purge this repo's
+  // stale vectors. Delete-by-filter (not drop) so other repos are untouched.
+  await ensureCollection(COLLECTION, 4096, true);
   try {
-    await qdrant.deleteIndex({ indexName: COLLECTION });
-    logger.info("Dropped existing code-chunks collection for clean reindex");
+    await rawQdrant.createPayloadIndex(COLLECTION, {
+      field_name: "repo",
+      field_schema: "keyword",
+      wait: true,
+    });
   } catch {
-    // Collection may not exist yet — that's fine
+    // Index already exists — fine
   }
-  await ensureCollection(COLLECTION);
+  try {
+    await rawQdrant.delete(COLLECTION, {
+      wait: true,
+      filter: { must: [{ key: "repo", match: { value: repoName } }] },
+    });
+    logger.info({ repo: repoName }, "Purged stale vectors for repo");
+  } catch {
+    // Collection was just created — nothing to delete
+  }
   logger.info(
     { files: sourceFiles.length, chunks: allChunks.length },
     "Starting codebase indexing",
   );
 
+  // --- Embed and upsert in batches ---
+
   for (let i = 0; i < allChunks.length; i += UPSERT_BATCH_SIZE) {
     const batch = allChunks.slice(i, i + UPSERT_BATCH_SIZE);
 
-    const textsToEmbed = batch.map(
-      (chunk) => `${chunk.language} ${chunk.layer} ${chunk.filePath}\n\n${chunk.content}`,
-    );
+    // Phase 2: Prepend context to embedding text for richer vectors
+    const textsToEmbed = batch.map((chunk) => {
+      const prefix = `${chunk.language} ${chunk.layer} ${chunk.filePath}`;
+      return chunk.context
+        ? `${chunk.context}\n\n${prefix}\n\n${chunk.content}`
+        : `${prefix}\n\n${chunk.content}`;
+    });
     const embeddings = await embedTexts(textsToEmbed);
 
-    await qdrant.upsert({
-      indexName: COLLECTION,
-      vectors: embeddings,
-      ids: batch.map((chunk) => chunkId(chunk.filePath, chunk.startLine)),
-      metadata: batch.map((chunk) => ({
-        text: redactSecrets(chunk.content),
-        filePath: chunk.filePath,
-        language: chunk.language,
-        layer: chunk.layer,
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-      })),
+    // Phase 5: Generate sparse BM25 vectors from raw content + symbol names
+    const points = batch.map((chunk, idx) => {
+      const sparseText = [
+        chunk.content,
+        chunk.symbolName,
+        chunk.parentSymbol,
+        chunk.annotations.join(" "),
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+      return {
+        id: chunkId(repoName, chunk.filePath, chunk.startLine),
+        vector: {
+          dense: embeddings[idx],
+          bm25: textToSparse(sparseText),
+        },
+        payload: {
+          repo: repoName,
+          text: redactSecrets(chunk.content),
+          context: chunk.context,
+          filePath: chunk.filePath,
+          language: chunk.language,
+          layer: chunk.layer,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          symbolName: chunk.symbolName,
+          parentSymbol: chunk.parentSymbol,
+          chunkType: chunk.chunkType,
+          annotations: chunk.annotations,
+          chunkIndex: chunk.chunkIndex,
+          totalChunks: chunk.totalChunks,
+          headerChunkId: chunk.headerChunkId,
+        },
+      };
     });
+
+    await rawQdrant.upsert(COLLECTION, { wait: true, points });
 
     logger.info(
       { batch: Math.floor(i / UPSERT_BATCH_SIZE) + 1, chunks: batch.length },
@@ -200,19 +285,29 @@ export async function indexCodebase(
     );
   }
 
-  // Store the current HEAD SHA so the nightly incremental reindex knows
-  // where to diff from. Without this, the first nightly after a full index
-  // would fall back to "last 24 hours" and miss the baseline.
+  // Store the current HEAD SHA per repo so the nightly incremental reindex
+  // knows where to diff from.
   try {
     const headSha = await getHeadSha(codebasePath);
-    await redis.set("tiburcio:last-indexed-sha", headSha);
-    logger.info({ headSha }, "Stored HEAD SHA for incremental reindex baseline");
+    await redis.set(`tiburcio:codebase-head:${repoName}`, headSha);
+    logger.info({ repo: repoName, headSha }, "Stored HEAD SHA for incremental reindex baseline");
   } catch {
     // Not a git repo or git not available — nightly will use 24h fallback
   }
 
+  if (contextFailures > 0) {
+    logger.warn(
+      { contextFailures, totalChunks: allChunks.length },
+      "Some chunks indexed without contextual descriptions",
+    );
+  }
+
   logger.info(
-    { files: sourceFiles.length, totalChunks: allChunks.length },
+    {
+      repo: repoName,
+      files: sourceFiles.length,
+      totalChunks: allChunks.length,
+    },
     "Codebase indexing complete",
   );
   return { files: sourceFiles.length, chunks: allChunks.length };

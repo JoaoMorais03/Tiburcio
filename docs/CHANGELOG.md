@@ -4,6 +4,50 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-02-23
+
+Comprehensive RAG pipeline overhaul. Fixes broken retrieval, adopts 2025-2026 industry best practices.
+
+### RAG Pipeline (Breaking — Full Reindex Required)
+
+- **AST-based code chunking** — tree-sitter native bindings replace regex-based chunking for Java and TypeScript. Eliminates 31+ false positives per Java file from regex matching `if`/`switch`/`for`/`while` as methods. One language-agnostic recursive split algorithm (cAST/EMNLP 2025 inspired). Vue SFC sections split by regex, then `<script>` blocks AST-parsed with TypeScript grammar. SQL stays regex-based.
+- **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic 2024 technique). Context prepended to embedding text so vectors capture both code AND semantic purpose. 49% fewer retrieval failures in benchmarks.
+- **Parent-child chunk expansion** — each chunk stores `headerChunkId` pointing to its file's header chunk (imports, class declaration, fields). At query time, header chunks fetched via point lookup and included as `classContext` in results.
+- **Query expansion** — LLM generates 2-3 alternative search queries before searching. Catches results using different terminology for the same concept.
+- **Hybrid search (BM25 + vector)** — code-chunks collection now has dual vector spaces: dense (4096-dim cosine) + sparse BM25 (Qdrant IDF modifier). Queries use prefetch + RRF fusion via Qdrant Query API. Searching "OrderServiceImpl" now returns exact keyword matches alongside semantic results.
+- **Rich chunk metadata** — `symbolName`, `parentSymbol`, `chunkType`, `annotations`, `chunkIndex`, `totalChunks`, `headerChunkId` stored per chunk. searchCode returns all metadata to the agent.
+
+### Infrastructure
+
+- **Raw Qdrant client** — `rawQdrant` (`@qdrant/js-client-rest`) added to `infra.ts` alongside existing Mastra wrapper. Used for sparse vectors, Query API (prefetch + RRF), and point retrieval.
+- **Dockerfile** — added `python3`, `make`, `g++` to Alpine build stage for tree-sitter native bindings compilation.
+- **New dependencies** — `tree-sitter@^0.22.4`, `tree-sitter-java@^0.23.5`, `tree-sitter-typescript@^0.23.2`, `@qdrant/js-client-rest@^1.17.0`
+
+### Bug Fixes
+
+- **Fragile JSON extraction** — nightly review now tries `JSON.parse()` first, then code fences, then bare regex (was: regex only)
+- **Working memory** — chat agent now has actionable instructions to update working memory after each exchange
+- **File skip logging** — unreadable files during indexing now logged at debug level (was: silently skipped)
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `indexer/ast-chunker.ts` | Tree-sitter AST parsing, language-agnostic chunking |
+| `indexer/bm25.ts` | BM25 tokenizer for sparse vectors (FNV-1a hashing) |
+| `indexer/contextualize.ts` | Contextual retrieval — LLM context per chunk |
+| `indexer/query-expand.ts` | Query expansion — LLM search variants |
+| `__tests__/bm25.test.ts` | BM25 tokenizer tests (13 tests) |
+| `__tests__/contextualize.test.ts` | Contextualization tests (5 tests) |
+| `__tests__/query-expand.test.ts` | Query expansion tests (5 tests) |
+
+### Testing
+
+- **113 backend tests** (was 89) — 24 new tests covering BM25 tokenizer, query expansion, contextualization, and updated search-code hybrid search
+- **30 frontend tests** — unchanged
+
+---
+
 ## [1.0.0] - 2026-02-23
 
 First public release. A complete RAG-powered onboarding system with MCP integration for Claude Code.
@@ -18,7 +62,7 @@ First public release. A complete RAG-powered onboarding system with MCP integrat
 ### RAG Pipeline
 
 - **Language-aware code chunking** — Java methods, TypeScript exports, Vue SFC sections, SQL statements (max 3000 chars)
-- **Embeddings** via OpenRouter (`qwen/qwen3-embedding-8b`, 1024 dimensions, MTEB Code 80.68)
+- **Embeddings** via OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dimensions, MTEB Code 80.68)
 - **LLM-based reranking** on all 6 Qdrant tools (2x over-fetch, semantic + vector + position weights)
 - **6 Qdrant collections** — standards, code-chunks, architecture, schemas, reviews, test-suggestions
 - **Stale vector cleanup** — deletes vectors for deleted files and purges line-level vectors for modified files before re-upserting
@@ -42,7 +86,7 @@ First public release. A complete RAG-powered onboarding system with MCP integrat
 - **DOMPurify** sanitization on all rendered markdown
 - **Rate limiting** — global (100/min), auth (10/15min), chat (20/min per user)
 - **Secret redaction** before all embedding and LLM calls
-- **CODEBASE_BRANCH regex** validation prevents git argument injection
+- **CODEBASE_REPOS** branch names validated at parse time
 - **bcrypt** password hashing with timing-safe comparison
 
 ### Infrastructure

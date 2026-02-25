@@ -100,8 +100,8 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
     volumes:
-      - ./backend/src:/app/src
       - ./standards:/standards
+      - ${CODEBASE_HOST_PATH:-.}:/codebase:ro
     healthcheck:
       test:
         ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
@@ -119,8 +119,6 @@ services:
       - "5174:5173"
     depends_on:
       - backend
-    volumes:
-      - ./frontend/src:/app/src
     restart: unless-stopped
 
 volumes:

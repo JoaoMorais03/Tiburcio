@@ -48,4 +48,4 @@ Tiburcio implements the following security practices:
 3. Restrict `CORS_ORIGINS` to your actual domains
 4. Use a reverse proxy (nginx, Caddy) with TLS in production
 5. Keep dependencies updated — Dependabot is configured for automated PRs
-6. Review the `CODEBASE_PATH` setting — only index repositories you trust
+6. Review the `CODEBASE_REPOS` setting — only index repositories you trust

@@ -8,10 +8,20 @@ vi.mock("../indexer/embed.js", () => ({
 
 vi.mock("../mastra/infra.js", () => ({
   qdrant: { query: vi.fn() },
+  rawQdrant: { query: vi.fn(), retrieve: vi.fn() },
+  openrouter: { chat: vi.fn(() => ({})) },
 }));
 
 vi.mock("../indexer/rerank.js", () => ({
   rerankResults: vi.fn((_query: string, results: unknown[]) => Promise.resolve(results)),
+}));
+
+vi.mock("../indexer/query-expand.js", () => ({
+  expandQuery: vi.fn((query: string) => Promise.resolve([query])),
+}));
+
+vi.mock("../indexer/bm25.js", () => ({
+  textToSparse: vi.fn(() => ({ indices: [1, 2], values: [1.0, 1.0] })),
 }));
 
 vi.mock("../config/logger.js", () => ({
@@ -25,7 +35,7 @@ vi.mock("node:fs/promises", () => ({
 
 import { readdir, readFile } from "node:fs/promises";
 import { embedText } from "../indexer/embed.js";
-import { qdrant } from "../mastra/infra.js";
+import { qdrant, rawQdrant } from "../mastra/infra.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper needs to call .execute with loose types
 async function executeTool(
@@ -138,18 +148,35 @@ describe("RAG tools", () => {
   });
 
   describe("searchCode", () => {
-    it("embeds language+layer+query together for better semantic search", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.88,
-          metadata: {
-            filePath: "src/services/UserService.java",
-            language: "java",
-            layer: "service",
-            startLine: 10,
-            endLine: 25,
-            text: "public void createUser() { ... }",
+    it("uses hybrid search with query expansion and returns enriched results", async () => {
+      vi.mocked(rawQdrant.query).mockResolvedValue({
+        points: [
+          {
+            id: "abc-123",
+            score: 0.88,
+            payload: {
+              repo: "api",
+              filePath: "src/services/UserService.java",
+              language: "java",
+              layer: "service",
+              startLine: 10,
+              endLine: 25,
+              text: "public void createUser() { ... }",
+              symbolName: "createUser",
+              parentSymbol: "UserService",
+              chunkType: "method",
+              annotations: ["@Transactional"],
+              headerChunkId: "hdr-uuid",
+            },
           },
+        ],
+      } as never);
+
+      // Mock header chunk retrieval for Phase 3 expansion
+      vi.mocked(rawQdrant.retrieve).mockResolvedValue([
+        {
+          id: "hdr-uuid",
+          payload: { text: "import ...; class UserService {" },
         },
       ] as never);
 
@@ -159,41 +186,47 @@ describe("RAG tools", () => {
         layer: "service",
       });
 
-      // Verify the embedding combines language, layer, and query
+      // Verify embedding was called with language+layer+query
       expect(embedText).toHaveBeenCalledWith("java service create user");
 
-      // Verify filter builds both conditions
-      expect(qdrant.query).toHaveBeenCalledWith(
+      // Verify rawQdrant.query was called (hybrid search with prefetch + RRF)
+      expect(rawQdrant.query).toHaveBeenCalledWith(
+        "code-chunks",
         expect.objectContaining({
-          indexName: "code-chunks",
-          filter: {
-            must: [
-              { key: "language", match: { value: "java" } },
-              { key: "layer", match: { value: "service" } },
-            ],
-          },
+          query: { fusion: "rrf" },
+          limit: 16,
+          with_payload: true,
         }),
       );
 
       const results = result.results as Record<string, unknown>[];
-      expect(results[0]).toEqual({
+      expect(results[0]).toMatchObject({
+        repo: "api",
         filePath: "src/services/UserService.java",
         language: "java",
         layer: "service",
-        startLine: 10,
-        endLine: 25,
         code: "public void createUser() { ... }",
+        symbolName: "createUser",
+        parentSymbol: "UserService",
+        chunkType: "method",
+        annotations: ["@Transactional"],
+        classContext: "import ...; class UserService {",
         score: 0.88,
       });
     });
 
-    it("sends no filter when language and layer are omitted", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
-      await executeTool("../mastra/tools/search-code.js", {
+    it("returns empty results when no matches found", async () => {
+      vi.mocked(rawQdrant.query).mockResolvedValue({
+        points: [],
+      } as never);
+
+      const result = await executeTool("../mastra/tools/search-code.js", {
         query: "anything",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ filter: undefined }));
+      const results = result.results as unknown[];
+      expect(results).toHaveLength(0);
+      expect(result.message).toContain("No matching code found");
     });
   });
 

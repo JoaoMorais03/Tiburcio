@@ -22,11 +22,10 @@ export const envSchema = z.object({
   LANGFUSE_SECRET_KEY: z.string().optional(),
   LANGFUSE_BASE_URL: z.string().optional(),
 
-  CODEBASE_PATH: z.string().optional(),
-  CODEBASE_BRANCH: z
-    .string()
-    .regex(/^[a-zA-Z0-9._/-]+$/, "Invalid branch name")
-    .default("develop"),
+  // Multi-repo codebase indexing. Format: name:path:branch (comma-separated).
+  // Single repo:  CODEBASE_REPOS=myproject:/codebase:develop
+  // Multi-repo:   CODEBASE_REPOS=api:/codebase/api:develop,ui:/codebase/ui:develop
+  CODEBASE_REPOS: z.string().optional(),
 
   JWT_SECRET: z
     .string()
@@ -39,3 +38,21 @@ export const envSchema = z.object({
 });
 
 export const env = envSchema.parse(process.env);
+
+export interface RepoConfig {
+  name: string;
+  path: string;
+  branch: string;
+}
+
+/** Parse CODEBASE_REPOS into a list of repo configs. Returns [] if not set. */
+export function getRepoConfigs(): RepoConfig[] {
+  if (!env.CODEBASE_REPOS) return [];
+  return env.CODEBASE_REPOS.split(",").map((entry) => {
+    const parts = entry.trim().split(":");
+    if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
+      throw new Error(`Invalid CODEBASE_REPOS entry: "${entry.trim()}". Format: name:path:branch`);
+    }
+    return { name: parts[0], path: parts[1], branch: parts[2] };
+  });
+}

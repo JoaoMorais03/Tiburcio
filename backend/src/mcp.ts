@@ -13,7 +13,7 @@ import { searchStandards } from "./mastra/tools/search-standards.js";
 const server = new MCPServer({
   id: "tiburcio",
   name: "Tiburcio MCP",
-  version: "1.0.0",
+  version: "1.1.0",
   tools: {
     searchStandards,
     getPattern,

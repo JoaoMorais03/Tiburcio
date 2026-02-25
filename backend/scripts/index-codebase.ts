@@ -1,17 +1,24 @@
 // scripts/index-codebase.ts — CLI entrypoint for codebase indexing.
 
+import { getRepoConfigs } from "../src/config/env.js";
 import { indexCodebase } from "../src/indexer/index-codebase.js";
 
-const CODEBASE_PATH = process.env.CODEBASE_PATH;
-if (!CODEBASE_PATH) {
-  console.error("Error: CODEBASE_PATH env var is required");
+const repos = getRepoConfigs();
+if (repos.length === 0) {
+  console.error(
+    "Error: CODEBASE_REPOS env var is required. Format: name:path:branch",
+  );
   process.exit(1);
 }
 
-console.log("=== Code Indexer ===\n");
-indexCodebase(CODEBASE_PATH)
-  .then((r) => console.log(`Done! Indexed ${r.chunks} chunks from ${r.files} files.`))
-  .catch((e) => {
-    console.error("Code indexing failed:", e);
-    process.exit(1);
-  });
+console.log(
+  `=== Code Indexer (${repos.length} repo${repos.length > 1 ? "s" : ""}) ===\n`,
+);
+
+for (const repo of repos) {
+  console.log(
+    `Indexing ${repo.name} (${repo.path}, branch: ${repo.branch})...`,
+  );
+  const r = await indexCodebase(repo.path, repo.name);
+  console.log(`  Done: ${r.chunks} chunks from ${r.files} files.\n`);
+}
