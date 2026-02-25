@@ -257,7 +257,9 @@ Diffs:
 ${diffSummary}`;
 
         try {
-          const response = await codeReviewAgent.generate([{ role: "user", content: prompt }]);
+          const response = await codeReviewAgent.generate([{ role: "user", content: prompt }], {
+            abortSignal: AbortSignal.timeout(120_000),
+          });
           const text = typeof response.text === "string" ? response.text : "";
 
           // Parse JSON array: try full response first, then code fences, then bare regex
@@ -385,7 +387,9 @@ ${redactedDiff}
 Respond with ONLY a test scaffold — the actual test code a developer would use as a starting point. Use the testing framework appropriate for the language (Vitest for TypeScript, JUnit for Java). Keep it focused and practical.`;
 
         try {
-          const response = await codeReviewAgent.generate([{ role: "user", content: prompt }]);
+          const response = await codeReviewAgent.generate([{ role: "user", content: prompt }], {
+            abortSignal: AbortSignal.timeout(120_000),
+          });
           const text = typeof response.text === "string" ? response.text : "";
 
           if (text.trim()) {

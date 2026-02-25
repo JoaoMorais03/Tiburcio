@@ -5,11 +5,14 @@ import { basename, join, resolve } from "node:path";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod/v4";
 
-const PATTERNS_DIR = resolve(process.cwd(), "..", "standards", "patterns");
+const PATTERNS_DIR = resolve(import.meta.dirname, "..", "..", "..", "..", "standards", "patterns");
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
 
 export const getPattern = createTool({
   id: "getPattern",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Get a named code template/pattern or list all available patterns. " +
     "If name is omitted, returns a list of all available patterns with summaries. " +

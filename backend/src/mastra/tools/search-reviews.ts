@@ -5,13 +5,16 @@ import { z } from "zod/v4";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { qdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "reviews";
 
 export const searchReviews = createTool({
   id: "searchReviews",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Search recent code review insights from automated nightly reviews. " +
     "Use this when someone asks about recent changes, known issues, " +
@@ -44,13 +47,12 @@ export const searchReviews = createTool({
     const filter = conditions.length > 0 ? { must: conditions } : undefined;
 
     try {
-      let results = await qdrant.query({
+      const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 16,
+        topK: 8,
         filter,
       });
-      results = await rerankResults(query, results, 8);
 
       if (results.length === 0) {
         return {
@@ -64,14 +66,14 @@ export const searchReviews = createTool({
 
       return {
         results: results.map((r) => ({
-          review: r.metadata?.text ?? "",
+          review: truncate((r.metadata?.text as string) ?? ""),
           severity: r.metadata?.severity ?? "info",
           category: r.metadata?.category ?? "unknown",
           filePath: r.metadata?.filePath ?? "unknown",
           commitSha: r.metadata?.commitSha ?? "",
           author: r.metadata?.author ?? "unknown",
           date: r.metadata?.date ?? "",
-          mergeMessage: r.metadata?.mergeMessage ?? "",
+          mergeMessage: truncate((r.metadata?.mergeMessage as string) ?? "", 300),
           score: r.score ?? 0,
         })),
       };

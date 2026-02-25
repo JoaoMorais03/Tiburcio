@@ -5,13 +5,16 @@ import { z } from "zod/v4";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { qdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "standards";
 
 export const searchStandards = createTool({
   id: "searchStandards",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Search your team's coding standards, conventions, and best practices. " +
     "Use this when you need to know HOW the team does something (transactions, " +
@@ -36,13 +39,12 @@ export const searchStandards = createTool({
       : undefined;
 
     try {
-      let results = await qdrant.query({
+      const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 10,
+        topK: 5,
         filter,
       });
-      results = await rerankResults(query, results, 5);
 
       if (results.length === 0) {
         return {
@@ -60,7 +62,7 @@ export const searchStandards = createTool({
         results: results.map((r) => ({
           title: r.metadata?.title ?? "Untitled",
           category: r.metadata?.category ?? "unknown",
-          content: r.metadata?.text ?? "",
+          content: truncate((r.metadata?.text as string) ?? "", 2000),
           tags: r.metadata?.tags ?? [],
           score: r.score ?? 0,
         })),

@@ -41,6 +41,8 @@ export async function contextualizeChunk(
   filePath: string,
   language: string,
 ): Promise<string> {
+  if (!chunkContent.trim()) return "";
+
   const prompt = CONTEXT_PROMPT.replace("{FILE_CONTENT}", truncateFile(fullFileContent))
     .replace("{LANGUAGE}", language)
     .replace("{FILE_PATH}", filePath)
@@ -52,6 +54,7 @@ export async function contextualizeChunk(
       prompt,
       maxOutputTokens: 150,
       temperature: 0,
+      abortSignal: AbortSignal.timeout(30_000),
     });
     return text.trim();
   } catch (err) {
