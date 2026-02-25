@@ -1,5 +1,5 @@
 # --- Stage 1: Build ---
-FROM node:22-alpine AS builder
+FROM node:25-alpine AS builder
 
 WORKDIR /app
 
@@ -34,7 +34,7 @@ RUN pnpm --filter tiburcio-backend build
 RUN pnpm deploy --filter tiburcio-backend --prod --legacy /app/prod
 
 # --- Stage 2: Production ---
-FROM node:22-alpine AS runner
+FROM node:25-alpine AS runner
 
 # Corporate proxy CA cert: inject before apk so Alpine trusts TLS
 COPY --from=builder /usr/local/share/ca-certificates/node-certs.pe[m] /usr/local/share/ca-certificates/
