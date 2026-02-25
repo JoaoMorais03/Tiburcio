@@ -51,11 +51,14 @@ docker compose ps              # check service health
 - **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
 - **LLM**: OpenRouter (`minimax/minimax-m2.5` — best-in-class function calling via BFCL 76.8)
 - **Embeddings**: OpenRouter (`qwen/qwen3-embedding-8b` on Nebius, 4096 dims, MTEB Code 80.68 SOTA)
-- **Reranking**: Mastra `rerank()` on all 6 RAG tools (LLM-based semantic scoring, 2x over-fetch → rerank)
+- **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (4096-dim cosine) + BM25 sparse vectors with RRF fusion on code-chunks
+- **MCP Annotations**: All 7 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
+- **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
+- **Indexing**: Per-file pipeline with `p-limit(3)` concurrency — chunk, contextualize, embed, upsert per file. Data appears in Qdrant immediately. ~20-50 min for 558 files.
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
 - **MCP**: stdio transport for Claude Code integration (`backend/src/mcp.ts`)
 
@@ -71,15 +74,14 @@ All shared singletons live in `backend/src/mastra/infra.ts`: `qdrant` (Mastra wr
 ### Embedding layer separation
 `backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
 
-### RAG pipeline (v1.1)
+### RAG pipeline (v1.2.1)
 1. **AST chunking** — tree-sitter parses Java/TypeScript, regex splits Vue SFC sections then AST-parses `<script>`, SQL stays regex-based
 2. **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic technique, 49% fewer retrieval failures)
 3. **Header chunk linkage** — each chunk stores `headerChunkId` pointing to its file's imports/class declaration chunk
 4. **Dual vectors** — dense (4096-dim cosine) + sparse BM25 (IDF modifier, server-side) stored per chunk
-5. **Query expansion** — LLM generates 2-3 search variants before searching
-6. **Hybrid search** — dense + sparse prefetch with RRF fusion via Qdrant Query API
-7. **Header expansion** — after search, fetches header chunks for method-level results to provide class context
-8. **LLM reranking** — Mastra `rerank()` with semantic + vector + position weights
+5. **Hybrid search** — dense + sparse prefetch with RRF fusion via Qdrant Query API (Qdrant handles ranking, no query-time LLM calls)
+6. **Header expansion** — batch-fetches header chunks for method-level results to provide class context
+7. **Payload truncation** — large text fields capped before returning to Claude Code to minimize token overhead
 
 ### Tools import pattern
 Every RAG tool in `backend/src/mastra/tools/` follows:
@@ -114,15 +116,13 @@ backend/src/
   indexer/chunker.ts     # language dispatcher → AST or regex chunking
   indexer/contextualize.ts # contextual retrieval — LLM context per chunk before embedding
   indexer/embed.ts       # embedText, embedTexts, toUUID (OpenRouter)
-  indexer/query-expand.ts # query expansion — LLM generates search variants
-  indexer/rerank.ts      # rerankResults — Mastra LLM-based reranking wrapper
   indexer/redact.ts      # redactSecrets — strips secrets before sending to APIs
   indexer/fs.ts          # shared findMarkdownFiles utility
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # qdrant + rawQdrant + openrouter singletons + ensureCollection
   mastra/agents/         # chat-agent.ts, code-review-agent.ts
-  mastra/tools/          # 7 RAG tools (search-standards, search-code, etc.)
+  mastra/tools/          # 7 RAG tools + truncate.ts helper (search-standards, search-code, etc.)
   mastra/workflows/      # nightly-review.ts (only workflow)
   mastra/memory.ts       # semantic recall + working memory config
   mastra/index.ts        # Mastra instance (agents + workflow + observability)
@@ -149,21 +149,27 @@ backend/src/
 - **Embedding model migration**: Switching `EMBEDDING_MODEL` auto-drops all Qdrant collections on next startup (dimensions change). Model name stored in Redis as `tiburcio:embedding-model`. Re-indexing is triggered automatically.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
+- **BullMQ lock duration**: Worker uses `lockDuration: 300_000` (5 min) and `lockRenewTime: 60_000` (1 min). Default 30s lock causes stalled-job detection during long indexing runs.
 - **concurrency: 1** on BullMQ worker: indexing jobs run sequentially to avoid overwhelming OpenRouter rate limits.
+- **Contextualization skip logic**: Header chunks (imports/class declarations) and single-chunk small files (< 3000 chars) skip LLM contextualization — they are self-documenting, saving ~40% of LLM calls.
+- **Contextualization timeout**: `contextualizeChunk()` uses `AbortSignal.timeout(30_000)`. Timed-out chunks fall back to empty context. The dense + sparse vectors still work.
+- **p-limit concurrency**: `index-codebase.ts` uses `p-limit(3)` for file-level parallelism. ~3 concurrent LLM calls at any time, safe for OpenRouter rate limits.
 - **pino-pretty**: Only available in dev. Production uses JSON logging. If `NODE_ENV` is not set to `production` in Docker, pino-pretty import crashes the container.
 - **tree-sitter native bindings**: Requires `python3`, `make`, `g++` in the Docker build stage. Uses `createRequire()` for CJS interop in ESM project.
 - **code-chunks collection is sparse-enabled**: Uses named vectors (`dense` + `bm25`). The `rawQdrant` client must be used for upsert/query on this collection, not the Mastra wrapper.
 - **Full reindex required after v1.1 upgrade**: The code-chunks collection schema changed (named vectors + new metadata fields). The indexer automatically drops and recreates it.
+- **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
+- **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
 
 ## Testing
 
 Tests use Vitest with mocks — no external services needed. Key mock patterns:
 - `vi.mock("../mastra/infra.js")` for qdrant, rawQdrant, openrouter
 - `vi.mock("../indexer/embed.js")` for embedText
-- `vi.mock("../indexer/rerank.js")` for rerankResults (passthrough in tool tests)
-- `vi.mock("../indexer/query-expand.js")` for expandQuery (passthrough in tool tests)
 - `vi.mock("../indexer/bm25.js")` for textToSparse (stub in tool tests)
-- `vi.mock("ai")` for generateText (contextualize + query-expand tests)
+- `vi.mock("../indexer/contextualize.js")` for contextualizeChunks (stub in index-codebase tests)
+- `vi.mock("ai")` for generateText (contextualize tests)
+- `vi.mock("p-limit")` passthrough mock (index-codebase tests — no real concurrency in tests)
 - `vi.mock("../mastra/index.js")` for the Mastra agent
 - Chat tests parse SSE events with a `parseSSE()` helper
 - Auth tests mock Redis for refresh token jti storage
@@ -173,4 +179,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v1.1.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v1.2.1 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.

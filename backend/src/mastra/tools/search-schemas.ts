@@ -5,13 +5,16 @@ import { z } from "zod/v4";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { qdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "schemas";
 
 export const searchSchemas = createTool({
   id: "searchSchemas",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Search the indexed project database schema documentation. " +
     "Returns table definitions, column details, relationships, and indexes. " +
@@ -34,13 +37,12 @@ export const searchSchemas = createTool({
       : undefined;
 
     try {
-      let results = await qdrant.query({
+      const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 10,
+        topK: 5,
         filter,
       });
-      results = await rerankResults(query, results, 5);
 
       if (results.length === 0) {
         return {
@@ -56,7 +58,7 @@ export const searchSchemas = createTool({
         results: results.map((r) => ({
           tableName: r.metadata?.tableName ?? "unknown",
           description: r.metadata?.description ?? "",
-          content: r.metadata?.text ?? "",
+          content: truncate((r.metadata?.text as string) ?? ""),
           relations: r.metadata?.relations ?? [],
           indexes: r.metadata?.indexes ?? [],
           score: r.score ?? 0,

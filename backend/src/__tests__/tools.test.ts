@@ -12,14 +12,6 @@ vi.mock("../mastra/infra.js", () => ({
   openrouter: { chat: vi.fn(() => ({})) },
 }));
 
-vi.mock("../indexer/rerank.js", () => ({
-  rerankResults: vi.fn((_query: string, results: unknown[]) => Promise.resolve(results)),
-}));
-
-vi.mock("../indexer/query-expand.js", () => ({
-  expandQuery: vi.fn((query: string) => Promise.resolve([query])),
-}));
-
 vi.mock("../indexer/bm25.js", () => ({
   textToSparse: vi.fn(() => ({ indices: [1, 2], values: [1.0, 1.0] })),
 }));
@@ -49,6 +41,32 @@ async function executeTool(
   const result = await tool.execute(input as never, {} as never);
   return result as Record<string, unknown>;
 }
+
+describe("truncate", () => {
+  it("returns text unchanged when under the limit", async () => {
+    const { truncate } = await import("../mastra/tools/truncate.js");
+    expect(truncate("short text")).toBe("short text");
+  });
+
+  it("truncates text exceeding the default limit", async () => {
+    const { truncate } = await import("../mastra/tools/truncate.js");
+    const long = "a".repeat(2000);
+    const result = truncate(long);
+    expect(result.length).toBeLessThan(2000);
+    expect(result).toContain("… (truncated)");
+  });
+
+  it("respects a custom max parameter", async () => {
+    const { truncate } = await import("../mastra/tools/truncate.js");
+    const text = "hello world";
+    expect(truncate(text, 5)).toBe("hello\n… (truncated)");
+  });
+
+  it("returns empty string unchanged", async () => {
+    const { truncate } = await import("../mastra/tools/truncate.js");
+    expect(truncate("")).toBe("");
+  });
+});
 
 describe("RAG tools", () => {
   beforeEach(() => {
@@ -81,7 +99,7 @@ describe("RAG tools", () => {
         expect.objectContaining({
           indexName: "standards",
           queryVector: [0.1, 0.2, 0.3],
-          topK: 10,
+          topK: 5,
         }),
       );
 
@@ -148,7 +166,7 @@ describe("RAG tools", () => {
   });
 
   describe("searchCode", () => {
-    it("uses hybrid search with query expansion and returns enriched results", async () => {
+    it("uses query expansion + hybrid search and returns enriched results", async () => {
       vi.mocked(rawQdrant.query).mockResolvedValue({
         points: [
           {
@@ -172,7 +190,7 @@ describe("RAG tools", () => {
         ],
       } as never);
 
-      // Mock header chunk retrieval for Phase 3 expansion
+      // Mock batched header chunk retrieval
       vi.mocked(rawQdrant.retrieve).mockResolvedValue([
         {
           id: "hdr-uuid",
@@ -194,7 +212,7 @@ describe("RAG tools", () => {
         "code-chunks",
         expect.objectContaining({
           query: { fusion: "rrf" },
-          limit: 16,
+          limit: 8,
           with_payload: true,
         }),
       );
@@ -213,6 +231,45 @@ describe("RAG tools", () => {
         classContext: "import ...; class UserService {",
         score: 0.88,
       });
+    });
+
+    it("truncates large code and classContext fields", async () => {
+      const largeCode = "x".repeat(3000);
+      const largeHeader = "y".repeat(2000);
+
+      vi.mocked(rawQdrant.query).mockResolvedValue({
+        points: [
+          {
+            id: "big-1",
+            score: 0.9,
+            payload: {
+              text: largeCode,
+              headerChunkId: "hdr-big",
+              chunkType: "method",
+            },
+          },
+        ],
+      } as never);
+
+      vi.mocked(rawQdrant.retrieve).mockResolvedValue([
+        { id: "hdr-big", payload: { text: largeHeader } },
+      ] as never);
+
+      const result = await executeTool("../mastra/tools/search-code.js", {
+        query: "big function",
+      });
+
+      const results = result.results as Record<string, unknown>[];
+      const code = results[0].code as string;
+      const ctx = results[0].classContext as string;
+
+      // Code truncated to 1500 + suffix
+      expect(code.length).toBeLessThan(1600);
+      expect(code).toContain("… (truncated)");
+
+      // classContext truncated to 800 + suffix
+      expect(ctx.length).toBeLessThan(900);
+      expect(ctx).toContain("… (truncated)");
     });
 
     it("returns empty results when no matches found", async () => {
@@ -342,7 +399,7 @@ describe("RAG tools", () => {
         expect.objectContaining({
           indexName: "reviews",
           queryVector: [0.1, 0.2, 0.3],
-          topK: 16,
+          topK: 8,
         }),
       );
 
@@ -449,7 +506,7 @@ describe("RAG tools", () => {
         expect.objectContaining({
           indexName: "test-suggestions",
           queryVector: [0.1, 0.2, 0.3],
-          topK: 10,
+          topK: 5,
           filter: { must: [{ key: "language", match: { value: "java" } }] },
         }),
       );
