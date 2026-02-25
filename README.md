@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml"><img src="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.0.0-brightgreen.svg" alt="v1.0.0" /></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.1.0-brightgreen.svg" alt="v1.1.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-green.svg" alt="Node.js" /></a>
@@ -113,7 +113,7 @@ docker compose up -d
 
 Wait for all services to become healthy (`docker compose ps`), then open **http://localhost:5174**. Database migrations run automatically on first boot.
 
-Register a user and start chatting. On first boot, Tiburcio auto-indexes the bundled standards and architecture docs. If `CODEBASE_PATH` is set, it also queues a full codebase index.
+Register a user and start chatting. On first boot, Tiburcio auto-indexes the bundled standards and architecture docs. If `CODEBASE_REPOS` is set, it also queues a full codebase index.
 
 ### Development Mode
 
@@ -190,7 +190,7 @@ curl -X POST http://localhost:5174/api/admin/reindex --cookie "token=$TOKEN"
 # Or via CLI
 cd backend
 pnpm index:standards
-pnpm index:codebase        # set CODEBASE_PATH in .env first
+pnpm index:codebase        # set CODEBASE_REPOS in .env first
 pnpm index:architecture
 ```
 
@@ -203,7 +203,7 @@ pnpm index:architecture
 | Layer | Technology |
 |-------|-----------|
 | **Agent** | [Mastra](https://mastra.ai) + MiniMax M2.5 via [OpenRouter](https://openrouter.ai) |
-| **Embeddings** | `qwen/qwen3-embedding-8b` via OpenRouter (1024 dims, MTEB Code 80.68) |
+| **Embeddings** | `qwen/qwen3-embedding-8b` via OpenRouter (4096 dims, MTEB Code 80.68) |
 | **Reranking** | Mastra `rerank()` — LLM-based semantic scoring on all RAG tools |
 | **Vector DB** | [Qdrant](https://qdrant.tech) — 6 collections, cosine similarity |
 | **Backend** | [Hono](https://hono.dev) + Node.js 22 |
@@ -214,16 +214,16 @@ pnpm index:architecture
 | **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis |
 | **Observability** | [Langfuse](https://langfuse.com) (self-hosted) |
 | **MCP** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio transport) |
-| **Testing** | [Vitest](https://vitest.dev) — 119 tests (89 backend + 30 frontend) |
+| **Testing** | [Vitest](https://vitest.dev) — 143 tests (113 backend + 30 frontend) |
 
 ### Qdrant Collections
 
-All 1024-dimensional vectors via `qwen/qwen3-embedding-8b`.
+All 4096-dimensional vectors via `qwen/qwen3-embedding-8b`.
 
 | Collection | What's Indexed |
 |-----------|----------------|
 | `standards` | Team conventions, best practices |
-| `code-chunks` | Source code (language-aware chunking: Java, TS, Vue, SQL) |
+| `code-chunks` | Source code — AST chunking (tree-sitter) + hybrid search (dense + BM25 RRF) |
 | `architecture` | System architecture docs |
 | `schemas` | Database table documentation |
 | `reviews` | Nightly code review insights |
@@ -286,8 +286,8 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 | `EMBEDDING_PROVIDER` | No | `nebius` | Embedding provider on OpenRouter |
 | `REDIS_URL` | No | `redis://localhost:6379` | Redis connection string |
 | `QDRANT_URL` | No | `http://localhost:6333` | Qdrant server URL |
-| `CODEBASE_PATH` | No | — | Path to source code for indexing |
-| `CODEBASE_BRANCH` | No | `develop` | Branch for nightly review diffs |
+| `CODEBASE_HOST_PATH` | No | — | Host path to project root (mounted as `/codebase` in container) |
+| `CODEBASE_REPOS` | No | — | Repos to index. Format: `name:path:branch` (comma-separated for multi-repo) |
 | `PORT` | No | `3000` | Backend server port |
 | `NODE_ENV` | No | `development` | Environment (`development` or `production`) |
 | `CORS_ORIGINS` | No | `localhost:5173,5174` | Comma-separated allowed origins |
@@ -307,7 +307,7 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 ## Testing
 
 ```bash
-cd backend && pnpm test    # 89 tests
+cd backend && pnpm test    # 113 tests
 cd frontend && pnpm test   # 30 tests
 cd backend && pnpm check   # biome lint + tsc
 cd frontend && pnpm check  # biome lint + vue-tsc

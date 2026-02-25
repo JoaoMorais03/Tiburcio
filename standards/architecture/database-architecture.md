@@ -65,7 +65,7 @@ Separate from PostgreSQL. All collections use 1536-dimensional vectors (`text-em
 ### Incremental Indexing
 
 The nightly pipeline uses incremental indexing to keep collections fresh:
-1. Compare current commit SHA against `tiburcio:last-indexed-sha` in Redis
+1. Compare current commit SHA against `tiburcio:codebase-head:{repoName}` in Redis (per-repo)
 2. Get list of changed files via `git diff`
 3. Delete existing vectors for changed files (prevents stale/duplicate chunks)
 4. Chunk, embed, and upsert only the changed files

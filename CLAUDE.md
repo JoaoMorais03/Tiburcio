@@ -25,13 +25,13 @@ docker compose up db redis qdrant -d  # infrastructure only
 pnpm dev                              # backend + frontend dev servers
 
 # Backend (from backend/)
-pnpm test                  # 89 tests, no external deps needed
+pnpm test                  # 118 tests, no external deps needed
 pnpm check                 # biome lint + tsc type check
 pnpm build                 # tsc compile to dist/
 pnpm db:migrate            # run Drizzle migrations
 pnpm db:generate           # generate migration from schema changes
 pnpm index:standards       # CLI: index standards/ into Qdrant
-pnpm index:codebase        # CLI: index CODEBASE_PATH into Qdrant
+pnpm index:codebase        # CLI: index CODEBASE_REPOS into Qdrant
 pnpm index:architecture    # CLI: index architecture + schemas
 
 # Frontend (from frontend/)
@@ -50,9 +50,10 @@ docker compose ps              # check service health
 - **Backend**: Hono HTTP server + Mastra AI framework + BullMQ jobs
 - **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
 - **LLM**: OpenRouter (`minimax/minimax-m2.5` — best-in-class function calling via BFCL 76.8)
-- **Embeddings**: OpenRouter (`qwen/qwen3-embedding-8b` on Nebius, 1024 dims, MTEB Code 80.68 SOTA)
+- **Embeddings**: OpenRouter (`qwen/qwen3-embedding-8b` on Nebius, 4096 dims, MTEB Code 80.68 SOTA)
 - **Reranking**: Mastra `rerank()` on all 6 RAG tools (LLM-based semantic scoring, 2x over-fetch → rerank)
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
+- **Hybrid Search**: Dense vectors (4096-dim cosine) + BM25 sparse vectors with RRF fusion on code-chunks
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
@@ -61,16 +62,30 @@ docker compose ps              # check service health
 ## Key Patterns
 
 ### Single source of truth for infrastructure
-All shared singletons live in `backend/src/mastra/infra.ts`: qdrant client, openrouter client, `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
+All shared singletons live in `backend/src/mastra/infra.ts`: `qdrant` (Mastra wrapper), `rawQdrant` (raw Qdrant client for sparse vectors & Query API), `openrouter` client, `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
+
+### Two Qdrant clients
+- `qdrant` — Mastra `QdrantVector` wrapper for simple operations (single-vector collections)
+- `rawQdrant` — `@qdrant/js-client-rest` `QdrantClient` for sparse vectors, hybrid queries (prefetch + RRF), and point retrieval
 
 ### Embedding layer separation
 `backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
+
+### RAG pipeline (v1.1)
+1. **AST chunking** — tree-sitter parses Java/TypeScript, regex splits Vue SFC sections then AST-parses `<script>`, SQL stays regex-based
+2. **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic technique, 49% fewer retrieval failures)
+3. **Header chunk linkage** — each chunk stores `headerChunkId` pointing to its file's imports/class declaration chunk
+4. **Dual vectors** — dense (4096-dim cosine) + sparse BM25 (IDF modifier, server-side) stored per chunk
+5. **Query expansion** — LLM generates 2-3 search variants before searching
+6. **Hybrid search** — dense + sparse prefetch with RRF fusion via Qdrant Query API
+7. **Header expansion** — after search, fetches header chunks for method-level results to provide class context
+8. **LLM reranking** — Mastra `rerank()` with semantic + vector + position weights
 
 ### Tools import pattern
 Every RAG tool in `backend/src/mastra/tools/` follows:
 ```typescript
 import { embedText } from "../../indexer/embed.js";
-import { qdrant } from "../infra.js";
+import { rawQdrant } from "../infra.js";
 ```
 
 ### BullMQ job execution
@@ -94,14 +109,18 @@ backend/src/
   db/schema.ts           # Drizzle schema (users, conversations, messages)
   db/connection.ts       # postgres driver + drizzle instance
   db/migrate.ts          # Drizzle migrator
+  indexer/ast-chunker.ts # tree-sitter AST parsing (Java, TypeScript, Vue <script>)
+  indexer/bm25.ts        # BM25 tokenizer for sparse vectors (FNV-1a hashing)
+  indexer/chunker.ts     # language dispatcher → AST or regex chunking
+  indexer/contextualize.ts # contextual retrieval — LLM context per chunk before embedding
   indexer/embed.ts       # embedText, embedTexts, toUUID (OpenRouter)
-  indexer/chunker.ts     # language-aware code chunking (Java, TS, Vue, SQL)
+  indexer/query-expand.ts # query expansion — LLM generates search variants
   indexer/rerank.ts      # rerankResults — Mastra LLM-based reranking wrapper
   indexer/redact.ts      # redactSecrets — strips secrets before sending to APIs
   indexer/fs.ts          # shared findMarkdownFiles utility
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
-  mastra/infra.ts        # qdrant + openrouter singletons + ensureCollection
+  mastra/infra.ts        # qdrant + rawQdrant + openrouter singletons + ensureCollection
   mastra/agents/         # chat-agent.ts, code-review-agent.ts
   mastra/tools/          # 7 RAG tools (search-standards, search-code, etc.)
   mastra/workflows/      # nightly-review.ts (only workflow)
@@ -121,23 +140,30 @@ backend/src/
 - **env.ts side effect**: Importing `env.ts` triggers `envSchema.parse(process.env)` at module load. In tests, set required env vars in `beforeAll` before dynamic imports.
 - **`.js` extensions in imports**: TypeScript compiles to ESM. All relative imports MUST use `.js` extension (e.g., `import { qdrant } from "../mastra/infra.js"`).
 - **JWT_SECRET min 32 chars**: Zod enforces `.min(32)`. Generate with `openssl rand -base64 32`.
-- **CODEBASE_BRANCH regex**: Only `[a-zA-Z0-9._/-]+` allowed — prevents git argument injection.
+- **CODEBASE_REPOS format**: `name:path:branch` comma-separated. Single repo: `myproject:/codebase:develop`. Multi-repo: `api:/codebase/api:develop,ui:/codebase/ui:develop`.
+- **Multi-repo indexing**: All repos index into the same `code-chunks` collection with a `repo` metadata field. Chunk IDs include repo name to prevent cross-repo collisions. Per-repo HEAD SHA tracked in Redis as `tiburcio:codebase-head:{repoName}`.
 - **Qdrant healthcheck**: Uses `bash -c ':> /dev/tcp/localhost/6333'` because the qdrant image has no curl/wget.
-- **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_PATH` later, restart the backend and `code-chunks` will auto-index.
-- **`.tibignore`**: Place a `.tibignore` file in your `CODEBASE_PATH` root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
+- **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_REPOS` later, restart the backend and `code-chunks` will auto-index.
+- **`.tibignore`**: Place a `.tibignore` file in each repo root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
 - **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending text to OpenRouter or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
 - **Embedding model migration**: Switching `EMBEDDING_MODEL` auto-drops all Qdrant collections on next startup (dimensions change). Model name stored in Redis as `tiburcio:embedding-model`. Re-indexing is triggered automatically.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
 - **concurrency: 1** on BullMQ worker: indexing jobs run sequentially to avoid overwhelming OpenRouter rate limits.
 - **pino-pretty**: Only available in dev. Production uses JSON logging. If `NODE_ENV` is not set to `production` in Docker, pino-pretty import crashes the container.
+- **tree-sitter native bindings**: Requires `python3`, `make`, `g++` in the Docker build stage. Uses `createRequire()` for CJS interop in ESM project.
+- **code-chunks collection is sparse-enabled**: Uses named vectors (`dense` + `bm25`). The `rawQdrant` client must be used for upsert/query on this collection, not the Mastra wrapper.
+- **Full reindex required after v1.1 upgrade**: The code-chunks collection schema changed (named vectors + new metadata fields). The indexer automatically drops and recreates it.
 
 ## Testing
 
 Tests use Vitest with mocks — no external services needed. Key mock patterns:
-- `vi.mock("../mastra/infra.js")` for qdrant
+- `vi.mock("../mastra/infra.js")` for qdrant, rawQdrant, openrouter
 - `vi.mock("../indexer/embed.js")` for embedText
 - `vi.mock("../indexer/rerank.js")` for rerankResults (passthrough in tool tests)
+- `vi.mock("../indexer/query-expand.js")` for expandQuery (passthrough in tool tests)
+- `vi.mock("../indexer/bm25.js")` for textToSparse (stub in tool tests)
+- `vi.mock("ai")` for generateText (contextualize + query-expand tests)
 - `vi.mock("../mastra/index.js")` for the Mastra agent
 - Chat tests parse SSE events with a `parseSSE()` helper
 - Auth tests mock Redis for refresh token jti storage
@@ -147,4 +173,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v1.0.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v1.1.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.

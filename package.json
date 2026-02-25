@@ -1,6 +1,14 @@
 {
   "name": "tiburcio",
   "private": true,
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "tree-sitter",
+      "tree-sitter-java",
+      "tree-sitter-javascript",
+      "tree-sitter-typescript"
+    ]
+  },
   "scripts": {
     "dev": "pnpm -r run dev",
     "build": "pnpm -r run build",

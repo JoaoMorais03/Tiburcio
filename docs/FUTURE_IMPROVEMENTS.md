@@ -10,43 +10,18 @@ The roadmap below focuses exclusively on making Tiburcio the most useful onboard
 
 ---
 
-## Phase 1: Knowledge Freshness — Nightly Re-Indexing (Done in v1.0.0)
+## Completed
 
-**Status: Complete**
-
-- BullMQ repeatable cron jobs run nightly at 2 AM
-- Incremental indexing via `git diff` against last indexed commit SHA (stored in Redis)
-- Stale vector cleanup — deletes vectors for removed/renamed files before re-upserting
-- All 4 indexing jobs: `index-standards`, `index-codebase`, `index-architecture`, `nightly-review`
-
----
-
-## Phase 2: Nightly Code Review Agent (Done in v1.0.0)
-
-**Status: Complete**
-
-- `code-review-agent` reviews merges to develop against team standards
-- `git-diff.ts` reads merge commits and file diffs via `execFile`
-- Review insights stored in Qdrant `reviews` collection (1024-dim, cosine)
-- `searchReviews` tool exposed to chat agent and MCP server
-- Integrated into the nightly-review Mastra workflow (multi-step)
-
----
-
-## Phase 3: Test Suggestion Engine (Done in v1.0.0)
-
-**Status: Complete**
-
-- Nightly pipeline generates test scaffolds from reviewed diffs
-- Suggestions stored in Qdrant `test-suggestions` collection
-- `getTestSuggestions` tool exposed to chat agent and MCP server
-- Suggestions are searchable knowledge, never auto-committed — surfaced as recommendations
+| Version | What was delivered |
+|---------|-------------------|
+| v1.0.0 | Nightly re-indexing, code review agent, test suggestion engine, 7 RAG tools, MCP server |
+| v1.1.0 | AST-based chunking (tree-sitter), contextual retrieval, query expansion, hybrid search (BM25 + vector RRF), parent-child chunk expansion |
 
 ---
 
 ## Phase 4: Onboarding Intelligence
 
-**Status: Planned**
+**Status: Next**
 
 **Problem**: Every new developer asks the same questions in a different order. There's no structured path from "I just joined" to "I'm productive."
 
@@ -136,72 +111,23 @@ Weekly job that:
 
 ---
 
-## Qdrant Collections (Current + Planned)
-
-| Collection | Status | Purpose |
-|-----------|--------|---------|
-| `standards` | Live | Team conventions, best practices |
-| `code-chunks` | Live | Indexed source code |
-| `architecture` | Live | Architecture documentation |
-| `schemas` | Live | Database schema docs |
-| `reviews` | Live | Nightly code review insights |
-| `test-suggestions` | Live | AI-generated test scaffolds |
-| `knowledge-gaps` | **Phase 4** | Under-documented areas |
-| `convention-scores` | **Phase 5** | Convention adherence tracking |
-
----
-
-## New Tools Summary
-
-| Tool | Status | Added To | Purpose |
-|------|--------|----------|---------|
-| `searchReviews` | Live | Chat agent + MCP | Query nightly review insights |
-| `getTestSuggestions` | Live | Chat agent + MCP | Test scaffolds from recent merges |
-| `getChangeSummary` | Phase 4 | Chat agent + MCP | "What did I miss?" summaries |
-| `getLearningPath` | Phase 4 | Chat agent + MCP | Personalized onboarding paths |
-
----
-
 ## Phase 6: Remote Codebase Support
 
 **Status: Planned**
 
-**Problem**: Tiburcio currently requires the codebase to be on the same machine (`CODEBASE_PATH` is a local filesystem path). This works when running on a developer's laptop, but limits deployment flexibility — you can't run Tiburcio on a server and point it at a repo that lives elsewhere.
+**Problem**: Tiburcio currently requires the codebase to be on the same machine (`CODEBASE_REPOS` paths are local filesystem paths). This works when running on a developer's laptop or a VPS with volume mounts, but limits deployment flexibility.
 
-**Goal**: Support indexing codebases that aren't on the local filesystem.
-
-### 6.1 Git Clone into Container (Primary Approach)
+### 6.1 Git Clone into Container
 
 Instead of requiring a mounted path, Tiburcio clones the repo itself:
-
-- New env vars: `CODEBASE_REPO_URL` (e.g., `https://github.com/org/repo.git`), `CODEBASE_GIT_TOKEN` (GitHub PAT or deploy key)
-- On startup: `git clone` into a known directory (e.g., `/data/codebase`)
+- New env vars: `CODEBASE_REPO_URL`, `CODEBASE_GIT_TOKEN`
+- On startup: `git clone` into a known directory
 - Before each nightly run: `git pull` to get latest changes
-- All existing indexers work unchanged — they already read from a filesystem path
-- All existing git-diff logic works unchanged — it already runs git commands against a local repo
-- Just needs a thin "sync" step that runs before indexing
-
-**Fallback behavior**: If `CODEBASE_PATH` is set, use it directly (current behavior). If `CODEBASE_REPO_URL` is set instead, clone and use the clone directory.
+- All existing indexers work unchanged
 
 ### 6.2 Remote MCP Server (HTTP/SSE Transport)
 
-Currently the MCP server uses stdio transport (local only). For remote access:
-
-- Switch to HTTP/SSE transport (Mastra already supports this)
-- Claude Code on a developer's laptop connects to Tiburcio over the network
-- Requires auth on the MCP endpoint (JWT or shared secret)
-- Enables a centralized Tiburcio instance that the whole team shares
-
-### 6.3 Lightweight Agent CLI (Future)
-
-For maximum flexibility, a CLI tool that runs in any repo and pushes data to Tiburcio:
-
-- Small binary/script that runs `git diff`, chunks files locally, sends results to Tiburcio's API
-- Tiburcio becomes a pure server that receives pre-processed data
-- Works in CI/CD pipelines, developer laptops, or any environment with git access
-- More complex to build but enables use cases where git clone isn't practical (monorepos, restricted access)
-
-**Files to change**: `indexer/index-codebase.ts` (add clone/pull logic), `config/env.ts` (new env vars), `jobs/queue.ts` (sync step before index), `mcp.ts` (HTTP transport option)
+Switch MCP to HTTP/SSE transport for network access. Claude Code on a developer's laptop connects to Tiburcio over the network. Requires auth on the MCP endpoint.
 
 ---
 
@@ -209,50 +135,23 @@ For maximum flexibility, a CLI tool that runs in any repo and pushes data to Tib
 
 **Status: Planned**
 
-**Problem**: No structured error tracking. If something fails at 3 AM during a nightly run, you only know from Docker logs — no aggregation, no alerting, no deduplication.
+**Recommendation**: [Bugsink](https://www.bugsink.com/) — single-container, self-hosted, Sentry SDK compatible, <1 GB RAM. Fits Tiburcio's "runs locally" philosophy.
 
-**Recommendation**: [Bugsink](https://www.bugsink.com/) — single-container, self-hosted, Sentry SDK compatible, <1 GB RAM. Fits Tiburcio's "runs locally" philosophy. Sentry self-hosted was evaluated and rejected (25+ containers, 32 GB RAM minimum).
-
-### Implementation
-
-- `docker-compose.yml`: Add `bugsink` service (single container)
-- Backend: `@sentry/node` SDK (Bugsink is wire-compatible) with `initBugsink()` in `config/`
-- Frontend: `@sentry/vue` SDK with `maskAllText: true`, `blockAllMedia: true` (privacy defaults)
+- `docker-compose.yml`: Add `bugsink` service
+- Backend: `@sentry/node` SDK with `initBugsink()` in `config/`
+- Frontend: `@sentry/vue` SDK with privacy defaults
 - Captures: unhandled exceptions, BullMQ job failures, nightly pipeline errors
-- No new external dependencies — runs entirely within the Docker Compose stack
-
-**Files to change**: `docker-compose.yml`, new `config/bugsink.ts`, `server.ts` (init + error middleware), `jobs/queue.ts` (job failure capture)
 
 ---
 
-## Implementation Order and Dependencies
+## Priority Matrix
 
-```
-Phase 1 ──────────────> Phase 2 ──────────────> Phase 3
-(Nightly indexing)      (Review agent)           (Test suggestions)
-  ✅ DONE                 ✅ DONE                   ✅ DONE
-                               │
-                               ▼
-                          Phase 4 ──────────────> Phase 5
-                          (Onboarding intel)       (Convention guardian)
-                            NEXT                     LATER
-
-                          Phase 6               Phase 7
-                          (Remote codebase)     (Error tracking)
-                            LATER (independent)   LATER (independent)
-```
-
-### Priority Matrix
-
-| Phase | Impact on Onboarding | Effort | Priority |
-|-------|---------------------|--------|----------|
-| 1 — Nightly Re-Index | High (fresh knowledge) | Low | **Done** |
-| 2 — Review Agent | Very high (recent change awareness) | Medium | **Done** |
-| 3 — Test Suggestions | Medium (helps testing questions) | Medium | **Done** |
-| 4 — Onboarding Intelligence | Very high (guided paths) | Medium-High | **Next** |
-| 5 — Convention Guardian | High (prevents drift) | Medium | Later |
-| 6 — Remote Codebase | High (deployment flexibility) | Medium | Later (independent) |
-| 7 — Error Tracking | Medium (ops reliability) | Low | Later (independent) |
+| Phase | Impact | Effort | Priority |
+|-------|--------|--------|----------|
+| 4 — Onboarding Intelligence | Very high | Medium-High | **Next** |
+| 5 — Convention Guardian | High | Medium | Later |
+| 6 — Remote Codebase | High | Medium | Later (independent) |
+| 7 — Error Tracking | Medium | Low | Later (independent) |
 
 ---
 

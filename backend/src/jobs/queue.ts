@@ -3,7 +3,7 @@
 import { join } from "node:path";
 import { Queue, Worker } from "bullmq";
 
-import { env } from "../config/env.js";
+import { env, getRepoConfigs } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { indexArchitecture } from "../indexer/index-architecture.js";
 import { indexCodebase } from "../indexer/index-codebase.js";
@@ -37,9 +37,11 @@ async function runJob(jobName: IndexJobName): Promise<void> {
       break;
     }
     case "index-codebase": {
-      if (!env.CODEBASE_PATH)
-        throw new Error("CODEBASE_PATH env var is required for codebase indexing");
-      await indexCodebase(env.CODEBASE_PATH);
+      const repos = getRepoConfigs();
+      if (repos.length === 0) throw new Error("CODEBASE_REPOS not configured");
+      for (const repo of repos) {
+        await indexCodebase(repo.path, repo.name);
+      }
       break;
     }
     case "index-architecture": {

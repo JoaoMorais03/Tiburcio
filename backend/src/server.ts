@@ -13,7 +13,7 @@ import type { JwtVariables } from "hono/jwt";
 import { verify } from "hono/jwt";
 import { pinoLogger } from "hono-pino";
 
-import { env } from "./config/env.js";
+import { env, getRepoConfigs } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { redis } from "./config/redis.js";
 import { connection, db } from "./db/connection.js";
@@ -103,7 +103,7 @@ app.get("/api/health", async (c) => {
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.0.0" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.1.0" }));
 
 // --- MastraServer ---
 // Protect Mastra-managed routes (agent invocation, tool execution, workflows)
@@ -147,7 +147,7 @@ async function start(): Promise<void> {
   // Checks each collection individually so that:
   //  - First boot: all collections get indexed
   //  - Restart after partial failure: only missing ones are re-queued
-  //  - CODEBASE_PATH added later: codebase gets indexed on next restart
+  //  - CODEBASE_REPOS added later: codebase gets indexed on next restart
   try {
     const collections = await qdrant.listIndexes();
     const existing = new Set(collections);
@@ -164,9 +164,10 @@ async function start(): Promise<void> {
         jobId: "init-architecture",
       });
     }
-    if (!existing.has("code-chunks") && env.CODEBASE_PATH) {
+    const repos = getRepoConfigs();
+    if (!existing.has("code-chunks") && repos.length > 0) {
       logger.info(
-        { codebasePath: env.CODEBASE_PATH },
+        { repos: repos.map((r) => r.name) },
         "Missing 'code-chunks' collection — queuing full codebase indexing (this may take a while)",
       );
       await indexQueue.add("index-codebase", {} as Record<string, never>, {
