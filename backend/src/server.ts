@@ -11,6 +11,7 @@ import { getCookie } from "hono/cookie";
 import { cors } from "hono/cors";
 import type { JwtVariables } from "hono/jwt";
 import { verify } from "hono/jwt";
+import { secureHeaders } from "hono/secure-headers";
 import { pinoLogger } from "hono-pino";
 
 import { env, getRepoConfigs } from "./config/env.js";
@@ -40,6 +41,8 @@ app.use(
     credentials: true,
   }),
 );
+
+app.use("*", secureHeaders());
 
 // Cookie-based JWT auth middleware (reads httpOnly cookie instead of Bearer header)
 const cookieAuth = async (
@@ -103,7 +106,7 @@ app.get("/api/health", async (c) => {
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.1.0" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.2.1" }));
 
 // --- MastraServer ---
 // Protect Mastra-managed routes (agent invocation, tool execution, workflows)

@@ -67,14 +67,14 @@ graph LR
 
     UI -- SSE --> Agent
     CC -- MCP stdio --> Agent
-    Agent --> Tools --> Rerank --> Qdrant
+    Agent --> Tools --> Qdrant
     Agent --> PG
     Agent --> Redis
 ```
 
 ### Day Mode — Answer Questions
 
-A developer asks a question via the chat UI or Claude Code. The AI agent picks the right RAG tool, queries Qdrant vectors, reranks results with LLM-based semantic scoring, and returns an answer grounded in your actual documentation and code.
+A developer asks a question via the chat UI or Claude Code. The AI agent picks the right RAG tool, queries Qdrant vectors with hybrid search (dense + BM25 RRF fusion), and returns an answer grounded in your actual documentation and code.
 
 ### Night Mode — Learn What Changed
 
@@ -148,7 +148,7 @@ Claude Code now has 7 specialized tools:
 | `getTestSuggestions` | AI-generated test scaffolds | `language`: java, typescript, vue |
 | `getPattern` | Code templates (list or get by name) | `name` |
 
-Every tool uses **LLM-based reranking** with 2x over-fetch for high-quality results, **strict enum inputs** to prevent empty results from typos, and **recovery guidance** when no results are found (suggests alternative tools).
+Every tool uses **Qdrant RRF fusion** for ranking (dense + BM25 hybrid search), **payload truncation** to minimize Claude Code token overhead, **MCP annotations** (`readOnlyHint`, `openWorldHint`), **strict enum inputs** to prevent empty results from typos, and **recovery guidance** when no results are found (suggests alternative tools).
 
 ### Example: Morning Workflow
 
@@ -204,7 +204,7 @@ pnpm index:architecture
 |-------|-----------|
 | **Agent** | [Mastra](https://mastra.ai) + MiniMax M2.5 via [OpenRouter](https://openrouter.ai) |
 | **Embeddings** | `qwen/qwen3-embedding-8b` via OpenRouter (4096 dims, MTEB Code 80.68) |
-| **Reranking** | Mastra `rerank()` — LLM-based semantic scoring on all RAG tools |
+| **Ranking** | Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) |
 | **Vector DB** | [Qdrant](https://qdrant.tech) — 6 collections, cosine similarity |
 | **Backend** | [Hono](https://hono.dev) + Node.js 22 |
 | **Frontend** | [Vue 3](https://vuejs.org) + Vite + Tailwind CSS v4 |

@@ -66,6 +66,32 @@ describe("contextualizeChunk", () => {
     const result = await contextualizeChunk("file", "chunk", "test.ts", "typescript");
     expect(result).toBe("context with spaces");
   });
+
+  it("passes abortSignal to generateText", async () => {
+    vi.mocked(generateText).mockResolvedValue({ text: "context" } as never);
+
+    await contextualizeChunk("file", "chunk", "test.ts", "typescript");
+
+    expect(generateText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("returns empty string for empty chunk content", async () => {
+    const result = await contextualizeChunk("file content", "", "test.ts", "typescript");
+
+    expect(result).toBe("");
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  it("returns empty string for whitespace-only chunk content", async () => {
+    const result = await contextualizeChunk("file content", "  \n  ", "test.ts", "typescript");
+
+    expect(result).toBe("");
+    expect(generateText).not.toHaveBeenCalled();
+  });
 });
 
 describe("contextualizeChunks", () => {

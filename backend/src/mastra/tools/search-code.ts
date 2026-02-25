@@ -1,5 +1,5 @@
 // tools/search-code.ts — Search the indexed codebase via Qdrant.
-// v1.1: Query expansion + hybrid search (dense + BM25 RRF) + header chunk expansion.
+// Pipeline: embed → hybrid search (dense + BM25 RRF) → batch header expansion.
 
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod/v4";
@@ -7,27 +7,71 @@ import { z } from "zod/v4";
 import { logger } from "../../config/logger.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { embedText } from "../../indexer/embed.js";
-import { expandQuery } from "../../indexer/query-expand.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { rawQdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "code-chunks";
 
-/** Fetch a single point by ID from Qdrant. Returns the payload or null. */
-async function fetchPoint(id: string): Promise<Record<string, unknown> | null> {
+interface QdrantPoint {
+  id: string | number;
+  score?: number;
+  payload?: Record<string, unknown>;
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat ?? chains for metadata fallbacks
+function mapPointToResult(p: QdrantPoint, headerMap: Map<string, string>) {
+  const m = (p.payload ?? {}) as Record<string, unknown>;
+  const headerChunkId = m.headerChunkId as string | null;
+  const needsHeader = headerChunkId && m.chunkType !== "header";
+  return {
+    repo: (m.repo as string) ?? "unknown",
+    filePath: (m.filePath as string) ?? "unknown",
+    language: (m.language as string) ?? "unknown",
+    layer: (m.layer as string) ?? "unknown",
+    startLine: (m.startLine as number) ?? 0,
+    endLine: (m.endLine as number) ?? 0,
+    code: truncate((m.text as string) ?? ""),
+    symbolName: (m.symbolName as string) ?? null,
+    parentSymbol: (m.parentSymbol as string) ?? null,
+    chunkType: (m.chunkType as string) ?? "other",
+    annotations: (m.annotations as string[]) ?? [],
+    classContext: truncate((needsHeader ? headerMap.get(headerChunkId) : null) ?? "", 800),
+    score: p.score ?? 0,
+  };
+}
+
+/** Fetch header chunks in a single batch retrieve call. */
+async function fetchHeaders(points: QdrantPoint[]): Promise<Map<string, string>> {
+  const headerIds = new Set<string>();
+  for (const p of points) {
+    const payload = p.payload as Record<string, unknown> | undefined;
+    const hid = payload?.headerChunkId as string | null;
+    if (hid && payload?.chunkType !== "header") headerIds.add(hid);
+  }
+
+  const headerMap = new Map<string, string>();
+  if (headerIds.size === 0) return headerMap;
+
   try {
-    const points = await rawQdrant.retrieve(COLLECTION, {
-      ids: [id],
+    const headerPoints = await rawQdrant.retrieve(COLLECTION, {
+      ids: [...headerIds],
       with_payload: true,
     });
-    return (points[0]?.payload as Record<string, unknown>) ?? null;
+    for (const hp of headerPoints) {
+      const text = (hp.payload as Record<string, unknown>)?.text as string;
+      if (text) headerMap.set(String(hp.id), text);
+    }
   } catch {
-    return null;
+    // Header expansion is best-effort
   }
+  return headerMap;
 }
 
 export const searchCode = createTool({
   id: "searchCode",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Search real production code from the indexed codebase using hybrid search (semantic + keyword matching). " +
     "Returns enriched results with symbolName, classContext, annotations, and exact line ranges. " +
@@ -77,11 +121,8 @@ export const searchCode = createTool({
 
   execute: async (inputData) => {
     const { query, repo, language, layer } = inputData;
+    const t0 = Date.now();
 
-    // Phase 4: Expand query into semantic variants for broader recall
-    const variants = await expandQuery(query);
-
-    // Build Qdrant filter conditions
     const conditions: Array<{ key: string; match: { value: string } }> = [];
     if (repo) conditions.push({ key: "repo", match: { value: repo } });
     if (language) conditions.push({ key: "language", match: { value: language } });
@@ -89,52 +130,29 @@ export const searchCode = createTool({
     const filter = conditions.length > 0 ? { must: conditions } : undefined;
 
     try {
-      // Embed all query variants in parallel
-      const embeddingPromises = variants.map((v) => {
-        const textToEmbed = [language, layer, v].filter(Boolean).join(" ");
-        return embedText(textToEmbed);
-      });
-      const denseVectors = await Promise.all(embeddingPromises);
+      const textToEmbed = [language, layer, query].filter(Boolean).join(" ");
+      const denseVec = await embedText(textToEmbed);
+      const tEmbed = Date.now();
 
-      // Phase 5: Build prefetch queries — dense + sparse for each variant
-      const prefetch: Array<{
-        query: number[] | { indices: number[]; values: number[] };
-        using: string;
-        limit: number;
-        filter?: typeof filter;
-      }> = [];
-
-      for (const denseVec of denseVectors) {
-        prefetch.push({ query: denseVec, using: "dense", limit: 20, filter });
-      }
-      for (const variant of variants) {
-        const sparseText = [language, layer, variant].filter(Boolean).join(" ");
-        prefetch.push({
-          query: textToSparse(sparseText),
-          using: "bm25",
-          limit: 20,
-          filter,
-        });
-      }
-
-      // Hybrid search with RRF fusion
+      // Hybrid search: dense + BM25 prefetch with RRF fusion (Qdrant handles ranking)
       const rawResults = await rawQdrant.query(COLLECTION, {
-        prefetch,
+        prefetch: [
+          { query: denseVec, using: "dense", limit: 20, filter },
+          { query: textToSparse(textToEmbed), using: "bm25", limit: 20, filter },
+        ],
         query: { fusion: "rrf" },
-        limit: 16,
+        limit: 8,
         with_payload: true,
       });
+      const tSearch = Date.now();
 
-      // Convert to QueryResult format for rerankResults compatibility
-      const queryResults = rawResults.points.map((p) => ({
-        id: String(p.id),
-        score: p.score ?? 0,
-        metadata: (p.payload ?? {}) as Record<string, unknown>,
-      }));
+      const points = rawResults.points as QdrantPoint[];
 
-      const reranked = await rerankResults(query, queryResults, 8);
-
-      if (reranked.length === 0) {
+      if (points.length === 0) {
+        logger.info(
+          { query, embed: tEmbed - t0, search: tSearch - tEmbed },
+          "searchCode: no results",
+        );
         return {
           results: [],
           message:
@@ -144,32 +162,20 @@ export const searchCode = createTool({
         };
       }
 
-      // Phase 3: Expand header chunks for method-level results
-      const results = await Promise.all(
-        // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: result mapping with conditional header expansion is inherently branchy
-        reranked.map(async (r) => {
-          const headerChunkId = r.metadata?.headerChunkId as string | null;
-          let classContext: string | null = null;
-          if (headerChunkId && r.metadata?.chunkType !== "header") {
-            const header = await fetchPoint(headerChunkId);
-            classContext = (header?.text as string) ?? null;
-          }
-          return {
-            repo: (r.metadata?.repo as string) ?? "unknown",
-            filePath: (r.metadata?.filePath as string) ?? "unknown",
-            language: (r.metadata?.language as string) ?? "unknown",
-            layer: (r.metadata?.layer as string) ?? "unknown",
-            startLine: (r.metadata?.startLine as number) ?? 0,
-            endLine: (r.metadata?.endLine as number) ?? 0,
-            code: (r.metadata?.text as string) ?? "",
-            symbolName: (r.metadata?.symbolName as string) ?? null,
-            parentSymbol: (r.metadata?.parentSymbol as string) ?? null,
-            chunkType: (r.metadata?.chunkType as string) ?? "other",
-            annotations: (r.metadata?.annotations as string[]) ?? [],
-            classContext,
-            score: r.score ?? 0,
-          };
-        }),
+      const headerMap = await fetchHeaders(points);
+      const tHeaders = Date.now();
+
+      const results = points.map((p) => mapPointToResult(p, headerMap));
+
+      logger.info(
+        {
+          query,
+          embed: tEmbed - t0,
+          search: tSearch - tEmbed,
+          headers: tHeaders - tSearch,
+          total: Date.now() - t0,
+        },
+        "searchCode timing (ms)",
       );
 
       return { results };

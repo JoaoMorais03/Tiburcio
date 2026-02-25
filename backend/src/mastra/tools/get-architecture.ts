@@ -5,13 +5,16 @@ import { z } from "zod/v4";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { qdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "architecture";
 
 export const getArchitecture = createTool({
   id: "getArchitecture",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Search system architecture documentation for the indexed project. " +
     "Returns high-level flow descriptions showing how systems connect. " +
@@ -42,13 +45,12 @@ export const getArchitecture = createTool({
     const filter = area ? { must: [{ key: "area", match: { value: area } }] } : undefined;
 
     try {
-      let results = await qdrant.query({
+      const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 10,
+        topK: 5,
         filter,
       });
-      results = await rerankResults(query, results, 5);
 
       if (results.length === 0) {
         return {
@@ -65,7 +67,7 @@ export const getArchitecture = createTool({
         results: results.map((r) => ({
           title: r.metadata?.title ?? "Untitled",
           area: r.metadata?.area ?? "unknown",
-          content: r.metadata?.text ?? "",
+          content: truncate((r.metadata?.text as string) ?? "", 2000),
           keyFiles: r.metadata?.keyFiles ?? [],
           score: r.score ?? 0,
         })),

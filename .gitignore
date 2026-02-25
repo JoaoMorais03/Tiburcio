@@ -30,3 +30,6 @@ frontend/stats.html
 .claude/projects/
 .claude/todos/
 CLAUDE.local.md
+
+# Serena MCP (local tool config)
+.serena/

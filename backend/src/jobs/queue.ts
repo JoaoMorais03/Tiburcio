@@ -94,7 +94,12 @@ export function startIndexWorker(): Worker<Record<string, never>, void, IndexJob
       await runJob(job.name);
       logger.info({ jobName: job.name, jobId: job.id }, "Indexing job completed");
     },
-    { connection, concurrency: 1 },
+    {
+      connection,
+      concurrency: 1,
+      lockDuration: 300_000,
+      lockRenewTime: 60_000,
+    },
   );
 
   worker.on("failed", (job, err) => {
