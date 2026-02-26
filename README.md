@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml"><img src="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.1.0-brightgreen.svg" alt="v1.1.0" /></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.2.1-brightgreen.svg" alt="v1.2.1" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-green.svg" alt="Node.js" /></a>
@@ -56,7 +56,6 @@ graph LR
     subgraph Tiburcio
         Agent["Mastra AI Agent"]
         Tools["7 RAG Tools"]
-        Rerank["LLM Reranking"]
     end
 
     subgraph Storage
@@ -214,7 +213,7 @@ pnpm index:architecture
 | **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis |
 | **Observability** | [Langfuse](https://langfuse.com) (self-hosted) |
 | **MCP** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio transport) |
-| **Testing** | [Vitest](https://vitest.dev) — 143 tests (113 backend + 30 frontend) |
+| **Testing** | [Vitest](https://vitest.dev) — 162 tests (132 backend + 30 frontend) |
 
 ### Qdrant Collections
 
@@ -307,7 +306,7 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 ## Testing
 
 ```bash
-cd backend && pnpm test    # 113 tests
+cd backend && pnpm test    # 132 tests
 cd frontend && pnpm test   # 30 tests
 cd backend && pnpm check   # biome lint + tsc
 cd frontend && pnpm check  # biome lint + vue-tsc
@@ -319,12 +318,14 @@ All tests run with mocks — no external services needed.
 
 ## Roadmap
 
-See [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) for the full plan:
+See [`docs/V2_PLAN.md`](docs/V2_PLAN.md) for the active v2.0 roadmap:
 
-- **Onboarding Intelligence** — learning paths, "what did I miss?" summaries, knowledge gap detection
-- **Convention Guardian** — adherence scoring, drift reports, optional PR integration
-- **Remote Codebase** — git clone support, HTTP MCP transport
-- **Error Tracking** — self-hosted Bugsink integration
+- **Event-Driven Freshness** — webhook-triggered indexing, <10 min freshness guarantee
+- **Nightly Intelligence** — convention scoring, drift reports, change summaries
+- **Shared Team Deployment** — HTTP/SSE MCP transport, git clone support, one pod for the team
+- **Convention Guardian** — active monitoring with scoring, tracking, and reporting
+
+See [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) for the original v1.x roadmap (historical reference).
 
 ---
 

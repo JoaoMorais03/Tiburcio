@@ -1,5 +1,7 @@
 # Tiburcio Roadmap — The Best Onboarding Knowledge System
 
+> **Note**: The active roadmap for Tiburcio v2.0 is in [`V2_PLAN.md`](./V2_PLAN.md). This document covers the original v1.x roadmap phases and is kept for historical reference. Phases 4-7 below have been superseded by the v2.0 plan, which reframes Tiburcio from a passive knowledge system into an active team intelligence engine.
+
 ## Mission
 
 Tiburcio exists to answer one question: **"How do we do things here?"**
@@ -16,6 +18,8 @@ The roadmap below focuses exclusively on making Tiburcio the most useful onboard
 |---------|-------------------|
 | v1.0.0 | Nightly re-indexing, code review agent, test suggestion engine, 7 RAG tools, MCP server |
 | v1.1.0 | AST-based chunking (tree-sitter), contextual retrieval, query expansion, hybrid search (BM25 + vector RRF), parent-child chunk expansion |
+| v1.2.0 | Multi-repo codebase indexing, per-repo isolation, collision-safe chunk IDs, `.tibignore` support |
+| v1.2.1 | Removed LLM reranking and query expansion (14-40s latency savings), payload truncation, MCP annotations |
 
 ---
 

@@ -61,7 +61,7 @@ cd frontend && pnpm check
 ## Running Tests
 
 ```bash
-# Backend tests (89 tests, no external deps needed)
+# Backend tests (132 tests, no external deps needed)
 cd backend && pnpm test
 
 # Frontend tests (30 tests)
@@ -72,7 +72,7 @@ cd frontend && pnpm test
 
 All PRs run automated checks via GitHub Actions:
 - **Lint & Type Check** — Biome + TypeScript on both backend and frontend
-- **Tests** — 89 backend unit tests + 30 frontend unit tests
+- **Tests** — 132 backend unit tests + 30 frontend unit tests
 - **Docker Build** — Validates multi-stage builds for both services
 
 To run the same checks locally before pushing:
