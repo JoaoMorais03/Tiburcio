@@ -25,7 +25,7 @@ docker compose up db redis qdrant -d  # infrastructure only
 pnpm dev                              # backend + frontend dev servers
 
 # Backend (from backend/)
-pnpm test                  # 118 tests, no external deps needed
+pnpm test                  # 132 tests, no external deps needed
 pnpm check                 # biome lint + tsc type check
 pnpm build                 # tsc compile to dist/
 pnpm db:migrate            # run Drizzle migrations
