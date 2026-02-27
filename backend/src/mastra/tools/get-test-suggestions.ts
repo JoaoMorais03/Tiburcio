@@ -5,13 +5,16 @@ import { z } from "zod/v4";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { rerankResults } from "../../indexer/rerank.js";
 import { qdrant } from "../infra.js";
+import { truncate } from "./truncate.js";
 
 const COLLECTION = "test-suggestions";
 
 export const getTestSuggestions = createTool({
   id: "getTestSuggestions",
+  mcp: {
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
   description:
     "Get AI-generated test suggestions for recently merged code. " +
     "Returns test scaffolds based on team conventions and existing test patterns. " +
@@ -37,13 +40,12 @@ export const getTestSuggestions = createTool({
     const filter = conditions.length > 0 ? { must: conditions } : undefined;
 
     try {
-      let results = await qdrant.query({
+      const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 10,
+        topK: 5,
         filter,
       });
-      results = await rerankResults(textToEmbed, results, 5);
 
       if (results.length === 0) {
         return {
@@ -57,7 +59,7 @@ export const getTestSuggestions = createTool({
 
       return {
         results: results.map((r) => ({
-          suggestion: r.metadata?.text ?? "",
+          suggestion: truncate((r.metadata?.text as string) ?? "", 2000),
           targetFile: r.metadata?.targetFile ?? "unknown",
           testType: r.metadata?.testType ?? "unit",
           language: r.metadata?.language ?? "unknown",

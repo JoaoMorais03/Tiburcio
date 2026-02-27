@@ -4,6 +4,61 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.1] - 2026-02-25
+
+MCP performance optimization. Removes all query-time LLM calls (reranking + query expansion), adds payload truncation and MCP annotations. All 7 tools now respond in under 1.5 seconds.
+
+### Performance
+
+- **Removed LLM reranking** — Mastra `rerank()` via OpenRouter added 7-22s per tool call. Qdrant's built-in RRF fusion (dense + BM25 reciprocal rank fusion) provides adequate ranking without the latency cost.
+- **Removed LLM query expansion** — `expandQuery()` called the LLM on every `searchCode` invocation to generate search variants, adding 7-18s per call. Contextual retrieval (index-time) + hybrid search (dense + BM25) already bridge terminology gaps, making query-time LLM expansion redundant.
+- **Payload truncation** — all tool outputs now cap large text fields (`code`: 1500 chars, `classContext`: 800, `content`/`suggestion`: 1500-2000, `mergeMessage`: 300) to reduce Claude Code token processing overhead.
+- **MCP annotations** — all 7 tools declare `readOnlyHint: true` and `openWorldHint: false` via Mastra's MCP annotation support, signaling safe read-only behavior to Claude Code.
+
+### Removed
+
+- `indexer/rerank.ts` — dead code after removing LLM reranking from all tools.
+- `indexer/query-expand.ts` — dead code after removing LLM query expansion from searchCode.
+- `__tests__/query-expand.test.ts` — tests for the removed query expansion.
+
+### New Files
+
+| File | Purpose |
+|------|---------|
+| `mastra/tools/truncate.ts` | Shared text truncation utility for tool output payloads |
+
+### Testing
+
+- **132 backend tests** (was 138) — removed 6 query expansion tests and the test file.
+- **30 frontend tests** — unchanged
+
+---
+
+## [1.2.0] - 2026-02-24
+
+Multi-repo codebase indexing. Replace single `CODEBASE_PATH` + `CODEBASE_BRANCH` with a unified `CODEBASE_REPOS` env var supporting multiple repositories.
+
+### Features
+
+- **Multi-repo indexing** — single env var `CODEBASE_REPOS` (`name:path:branch`, comma-separated) replaces `CODEBASE_PATH` + `CODEBASE_BRANCH`. All repos index into one `code-chunks` collection with a `repo` metadata field.
+- **Per-repo isolation** — re-indexing one repo doesn't wipe others (delete-by-repo-filter). Per-repo HEAD SHA tracking in Redis (`tiburcio:codebase-head:{repoName}`).
+- **Collision-safe chunk IDs** — `toUUID(repo:filePath:startLine)` prevents cross-repo ID collisions.
+- **Qdrant payload index** on `repo` field for O(1) filtering.
+- **searchCode repo filter** — optional `repo` parameter to search within a specific repository.
+- **Nightly pipeline** handles all repos independently.
+
+### Infrastructure
+
+- **Per-file indexing pipeline** — `p-limit(3)` concurrency, data appears in Qdrant immediately per file (~20-50 min for 558 files).
+- **Retry logic** — embedding and upsert operations retry up to 3 times with 1s delay on transient failures.
+- **`.tibignore` support** — per-repo ignore file using glob patterns to exclude files from indexing.
+
+### Testing
+
+- **138 backend tests** (was 113) — 12 new `index-codebase.test.ts` tests covering per-file pipeline, retry logic, contextualization skip, header chunks, error handling, and HEAD SHA storage.
+
+---
+
 ## [1.1.0] - 2026-02-23
 
 Comprehensive RAG pipeline overhaul. Fixes broken retrieval, adopts 2025-2026 industry best practices.
@@ -13,7 +68,7 @@ Comprehensive RAG pipeline overhaul. Fixes broken retrieval, adopts 2025-2026 in
 - **AST-based code chunking** — tree-sitter native bindings replace regex-based chunking for Java and TypeScript. Eliminates 31+ false positives per Java file from regex matching `if`/`switch`/`for`/`while` as methods. One language-agnostic recursive split algorithm (cAST/EMNLP 2025 inspired). Vue SFC sections split by regex, then `<script>` blocks AST-parsed with TypeScript grammar. SQL stays regex-based.
 - **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic 2024 technique). Context prepended to embedding text so vectors capture both code AND semantic purpose. 49% fewer retrieval failures in benchmarks.
 - **Parent-child chunk expansion** — each chunk stores `headerChunkId` pointing to its file's header chunk (imports, class declaration, fields). At query time, header chunks fetched via point lookup and included as `classContext` in results.
-- **Query expansion** — LLM generates 2-3 alternative search queries before searching. Catches results using different terminology for the same concept.
+- **Query expansion** — LLM generates 2-3 alternative search queries before searching. Catches results using different terminology for the same concept. — *removed in v1.2.1*
 - **Hybrid search (BM25 + vector)** — code-chunks collection now has dual vector spaces: dense (4096-dim cosine) + sparse BM25 (Qdrant IDF modifier). Queries use prefetch + RRF fusion via Qdrant Query API. Searching "OrderServiceImpl" now returns exact keyword matches alongside semantic results.
 - **Rich chunk metadata** — `symbolName`, `parentSymbol`, `chunkType`, `annotations`, `chunkIndex`, `totalChunks`, `headerChunkId` stored per chunk. searchCode returns all metadata to the agent.
 
@@ -36,10 +91,10 @@ Comprehensive RAG pipeline overhaul. Fixes broken retrieval, adopts 2025-2026 in
 | `indexer/ast-chunker.ts` | Tree-sitter AST parsing, language-agnostic chunking |
 | `indexer/bm25.ts` | BM25 tokenizer for sparse vectors (FNV-1a hashing) |
 | `indexer/contextualize.ts` | Contextual retrieval — LLM context per chunk |
-| `indexer/query-expand.ts` | Query expansion — LLM search variants |
+| `indexer/query-expand.ts` | Query expansion — LLM search variants — *removed in v1.2.1* |
 | `__tests__/bm25.test.ts` | BM25 tokenizer tests (13 tests) |
-| `__tests__/contextualize.test.ts` | Contextualization tests (5 tests) |
-| `__tests__/query-expand.test.ts` | Query expansion tests (5 tests) |
+| `__tests__/contextualize.test.ts` | Contextualization tests (8 tests) |
+| `__tests__/query-expand.test.ts` | Query expansion tests (6 tests) — *removed in v1.2.1* |
 
 ### Testing
 
@@ -63,7 +118,7 @@ First public release. A complete RAG-powered onboarding system with MCP integrat
 
 - **Language-aware code chunking** — Java methods, TypeScript exports, Vue SFC sections, SQL statements (max 3000 chars)
 - **Embeddings** via OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dimensions, MTEB Code 80.68)
-- **LLM-based reranking** on all 6 Qdrant tools (2x over-fetch, semantic + vector + position weights)
+- **LLM-based reranking** on all 6 Qdrant tools (2x over-fetch, semantic + vector + position weights) — *removed in v1.2.1*
 - **6 Qdrant collections** — standards, code-chunks, architecture, schemas, reviews, test-suggestions
 - **Stale vector cleanup** — deletes vectors for deleted files and purges line-level vectors for modified files before re-upserting
 - **Secret redaction** — strips API keys, connection strings, bearer tokens, AWS keys, and private keys before embedding

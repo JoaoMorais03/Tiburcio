@@ -21,7 +21,11 @@ export function toUUID(input: string): string {
 
 export async function embedText(text: string): Promise<number[]> {
   const redacted = redactSecrets(text);
-  const { embedding } = await embed({ model: embeddingModel, value: redacted });
+  const { embedding } = await embed({
+    model: embeddingModel,
+    value: redacted,
+    abortSignal: AbortSignal.timeout(60_000),
+  });
   return embedding;
 }
 
@@ -30,6 +34,7 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   const { embeddings } = await embedMany({
     model: embeddingModel,
     values: redacted,
+    abortSignal: AbortSignal.timeout(60_000),
   });
   return embeddings;
 }
