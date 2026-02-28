@@ -54,7 +54,7 @@ docker compose ps              # check service health
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
-- **MCP Annotations**: All 8 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
+- **MCP Annotations**: All 9 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
 - **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, summaries). Full mode via `compact: false`.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
@@ -126,7 +126,7 @@ backend/src/
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # qdrant + rawQdrant + chatModel + embeddingModel + ensureCollection
   mastra/agents/         # chat-agent.ts, code-review-agent.ts
-  mastra/tools/          # 8 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, etc.)
+  mastra/tools/          # 9 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, etc.)
   mastra/workflows/      # nightly-review.ts (only workflow)
   mastra/memory.ts       # semantic recall + working memory config
   mastra/index.ts        # Mastra instance (agents + workflow + observability)
@@ -137,7 +137,7 @@ backend/src/
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
   routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
-  mcp.ts                 # MCP stdio server (8 tools exposed)
+  mcp.ts                 # MCP stdio server (9 tools exposed)
 ```
 
 ## Gotchas

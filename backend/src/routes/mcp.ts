@@ -1,5 +1,5 @@
 // routes/mcp.ts — MCP HTTP/SSE transport for team deployment.
-// Exposes the same 8 tools as the stdio transport in src/mcp.ts.
+// Exposes the same 9 tools as the stdio transport in src/mcp.ts.
 // Authentication: Bearer token via TEAM_API_KEY env var.
 //
 // Developer setup:
@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 import { getArchitecture } from "../mastra/tools/get-architecture.js";
+import { getChangeSummary } from "../mastra/tools/get-change-summary.js";
 import { getNightlySummary } from "../mastra/tools/get-nightly-summary.js";
 import { getPattern } from "../mastra/tools/get-pattern.js";
 import { getTestSuggestions } from "../mastra/tools/get-test-suggestions.js";
@@ -36,6 +37,7 @@ const mcpServer = new MCPServer({
     searchReviews,
     getTestSuggestions,
     getNightlySummary,
+    getChangeSummary,
   },
 });
 

@@ -23,7 +23,7 @@
 
 ---
 
-Tiburcio is an MCP server that gives Claude Code deep context about your codebase. It indexes your standards, architecture docs, source code, and DB schemas into a vector database — then exposes 8 specialized tools that return focused, token-efficient answers. Every night it reviews yesterday's merges against your team's conventions and generates test suggestions.
+Tiburcio is an MCP server that gives Claude Code deep context about your codebase. It indexes your standards, architecture docs, source code, and DB schemas into a vector database — then exposes 9 specialized tools that return focused, token-efficient answers. Every night it reviews yesterday's merges against your team's conventions and generates test suggestions.
 
 **The result**: Claude Code stops guessing and starts answering from your actual codebase.
 
@@ -44,7 +44,7 @@ Developers end up repeating context in every prompt, or Claude Code produces cod
 
 Tiburcio bridges this gap by acting as a **codebase intelligence layer** between Claude Code and your team's knowledge:
 
-- **8 MCP tools** that return compact, focused answers (300-1,500 tokens per call, not 8,000)
+- **9 MCP tools** that return compact, focused answers (300-1,500 tokens per call, not 8,000)
 - **Nightly intelligence** — reviews merges against conventions, generates test scaffolds, flags critical issues
 - **Morning briefings** — "here's what changed overnight, here are the problems"
 - **Convention enforcement** — Claude Code checks standards before writing code
@@ -62,7 +62,7 @@ graph LR
     end
 
     subgraph Tiburcio
-        MCP["MCP Server (8 tools)"]
+        MCP["MCP Server (9 tools)"]
         Agent["AI Agent"]
     end
 
@@ -177,7 +177,7 @@ claude mcp add tiburcio \
   --header "Authorization:Bearer <team-api-key>"
 ```
 
-Claude Code now has 8 specialized tools. Ask it anything about your codebase.
+Claude Code now has 9 specialized tools. Ask it anything about your codebase.
 
 ### Development Mode
 
@@ -193,7 +193,7 @@ cd .. && pnpm dev                 # backend + frontend dev servers
 
 ## MCP Tools
 
-8 tools, each designed to return focused answers (compact mode by default):
+9 tools, each designed to return focused answers (compact mode by default):
 
 | Tool | What It Does | Key Filters |
 |------|-------------|-------------|
@@ -201,10 +201,11 @@ cd .. && pnpm dev                 # backend + frontend dev servers
 | `searchCode` | Source code by semantic meaning (hybrid search) | `language`: java, ts, vue, sql · `layer`: 20-value enum · `repo` |
 | `getArchitecture` | System architecture and component flows | `area`: auth, requests, batch, notifications, ... |
 | `searchSchemas` | Database table documentation and relationships | `tableName` |
-| `searchReviews` | Nightly code review insights and issues | `severity`: info, warning, critical · `category` |
-| `getTestSuggestions` | AI-generated test scaffolds from nightly analysis | `language`: java, typescript, vue |
+| `searchReviews` | Nightly code review insights and issues | `severity` · `category` · `since` |
+| `getTestSuggestions` | AI-generated test scaffolds from nightly analysis | `language` · `since` |
 | `getPattern` | Code templates (list or get by name) | `name` |
 | `getNightlySummary` | Morning briefing — merges, issues, test gaps | `daysBack` |
+| `getChangeSummary` | "What did I miss?" — grouped by area and severity | `since`: 1d, 7d, 2w · `area` |
 
 ### Token Efficiency
 
@@ -261,7 +262,7 @@ pnpm index:architecture
 
 | Layer | Technology |
 |-------|-----------|
-| **MCP Server** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio + HTTP/SSE transport, 8 tools) |
+| **MCP Server** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio + HTTP/SSE transport, 9 tools) |
 | **Agent** | [Mastra](https://mastra.ai) AI framework |
 | **LLM** | OpenRouter (MiniMax M2.5) or Ollama (Qwen3 8B) — provider-agnostic |
 | **Embeddings** | OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dims) or Ollama (`nomic-embed-text`, 768 dims) |

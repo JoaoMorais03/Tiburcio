@@ -30,9 +30,13 @@ export const searchReviews = createTool({
       .optional()
       .describe("Filter by severity level"),
     category: z
-      .enum(["convention", "bug", "security", "pattern", "architecture"])
+      .enum(["convention", "bug", "security", "pattern", "architecture", "change-summary"])
       .optional()
       .describe("Filter by review category"),
+    since: z
+      .string()
+      .optional()
+      .describe("Only return reviews from this date onward (ISO date, e.g. '2026-02-27')"),
     compact: z
       .boolean()
       .default(true)
@@ -43,13 +47,14 @@ export const searchReviews = createTool({
   }),
 
   execute: async (inputData) => {
-    const { query, severity, category, compact } = inputData;
+    const { query, severity, category, since, compact } = inputData;
 
     const embedding = await embedText(query);
 
-    const conditions: Array<{ key: string; match: { value: string } }> = [];
+    const conditions: Array<Record<string, unknown>> = [];
     if (severity) conditions.push({ key: "severity", match: { value: severity } });
     if (category) conditions.push({ key: "category", match: { value: category } });
+    if (since) conditions.push({ key: "date", range: { gte: since } });
 
     const filter = conditions.length > 0 ? { must: conditions } : undefined;
 

@@ -3,6 +3,7 @@
 
 import { MCPServer } from "@mastra/mcp";
 import { getArchitecture } from "./mastra/tools/get-architecture.js";
+import { getChangeSummary } from "./mastra/tools/get-change-summary.js";
 import { getNightlySummary } from "./mastra/tools/get-nightly-summary.js";
 import { getPattern } from "./mastra/tools/get-pattern.js";
 import { getTestSuggestions } from "./mastra/tools/get-test-suggestions.js";
@@ -24,6 +25,7 @@ const server = new MCPServer({
     searchReviews,
     getTestSuggestions,
     getNightlySummary,
+    getChangeSummary,
   },
 });
 

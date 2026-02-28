@@ -6,6 +6,7 @@ import { UnicodeNormalizer } from "@mastra/core/processors";
 import { chatModel } from "../infra.js";
 import { memory } from "../memory.js";
 import { getArchitecture } from "../tools/get-architecture.js";
+import { getChangeSummary } from "../tools/get-change-summary.js";
 import { getNightlySummary } from "../tools/get-nightly-summary.js";
 import { getPattern } from "../tools/get-pattern.js";
 import { getTestSuggestions } from "../tools/get-test-suggestions.js";
@@ -30,9 +31,10 @@ BEHAVIOR:
 6. If you don't know the exact pattern name, call getPattern without a name to list available patterns first.
 7. When asked about recent changes, what merged, or what happened recently -> use searchReviews.
 8. When asked to write tests, test recently changed code, or "test yesterday's merges" -> use getTestSuggestions AND searchReviews to understand what changed, then use searchCode to find existing test patterns.
-9. For greetings or casual messages, respond warmly and briefly, then ask how you can help with onboarding.
-10. If a question spans multiple areas, call multiple tools to build a complete answer.
-11. For ambiguous questions, ask a clarifying question before searching.
+9. When asked "what did I miss?", "what changed this week/month?", or catching up after time away -> use getChangeSummary.
+10. For greetings or casual messages, respond warmly and briefly, then ask how you can help with onboarding.
+11. If a question spans multiple areas, call multiple tools to build a complete answer.
+12. For ambiguous questions, ask a clarifying question before searching.
 
 RESPONSE RULES:
 - Base answers ONLY on tool results. If tools return no relevant information, say so honestly and suggest alternative search terms.
@@ -64,6 +66,7 @@ STRICT PROHIBITIONS:
     searchReviews,
     getTestSuggestions,
     getNightlySummary,
+    getChangeSummary,
   },
   memory,
   inputProcessors: [new UnicodeNormalizer({ stripControlChars: true })],

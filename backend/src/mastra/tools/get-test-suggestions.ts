@@ -26,6 +26,10 @@ export const getTestSuggestions = createTool({
       .enum(["java", "typescript", "vue"])
       .optional()
       .describe("Filter by programming language"),
+    since: z
+      .string()
+      .optional()
+      .describe("Only return suggestions from this date onward (ISO date, e.g. '2026-02-27')"),
     compact: z
       .boolean()
       .default(true)
@@ -36,13 +40,14 @@ export const getTestSuggestions = createTool({
   }),
 
   execute: async (inputData) => {
-    const { query, language, compact } = inputData;
+    const { query, language, since, compact } = inputData;
 
     const textToEmbed = [language, query].filter(Boolean).join(" ");
     const embedding = await embedText(textToEmbed);
 
-    const conditions: Array<{ key: string; match: { value: string } }> = [];
+    const conditions: Array<Record<string, unknown>> = [];
     if (language) conditions.push({ key: "language", match: { value: language } });
+    if (since) conditions.push({ key: "date", range: { gte: since } });
 
     const filter = conditions.length > 0 ? { must: conditions } : undefined;
 
