@@ -61,7 +61,7 @@ docker compose ps              # check service health
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
 - **Indexing**: Per-file pipeline with `p-limit(3)` concurrency — chunk, contextualize, embed, upsert per file. Data appears in Qdrant immediately. ~20-50 min for 558 files.
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
-- **MCP**: stdio transport for Claude Code integration (`backend/src/mcp.ts`)
+- **MCP**: stdio transport (`backend/src/mcp.ts`) + HTTP/SSE transport (`backend/src/routes/mcp.ts`, Bearer auth via `TEAM_API_KEY`)
 
 ## Key Patterns
 
@@ -135,6 +135,7 @@ backend/src/
   routes/auth.ts         # POST /api/auth/login, /register, /refresh, /logout (httpOnly cookies)
   routes/chat.ts         # POST /api/chat/stream (SSE), GET conversations/messages
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
+  routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
   mcp.ts                 # MCP stdio server (8 tools exposed)
 ```
@@ -166,6 +167,8 @@ backend/src/
 - **Full reindex required after v1.1 upgrade**: The code-chunks collection schema changed (named vectors + new metadata fields). The indexer automatically drops and recreates it.
 - **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
 - **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
+- **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses Mastra's `startHonoSSE()` for native Hono integration.
+- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add ... -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both expose the same 8 tools.
 
 ## Testing
 

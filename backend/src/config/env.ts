@@ -45,6 +45,10 @@ const baseSchema = z.object({
     .string()
     .min(32, "JWT_SECRET must be at least 32 characters (use: openssl rand -base64 32)"),
 
+  // Bearer token for MCP HTTP/SSE transport authentication.
+  // Required when exposing MCP over HTTP for team deployment.
+  TEAM_API_KEY: z.string().optional(),
+
   CORS_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
 
   PORT: z.coerce.number().default(3000),

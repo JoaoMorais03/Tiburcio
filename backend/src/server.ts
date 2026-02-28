@@ -25,6 +25,7 @@ import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limit
 import adminRouter from "./routes/admin.js";
 import authRouter from "./routes/auth.js";
 import chatRouter from "./routes/chat.js";
+import mcpRouter, { mcpServer } from "./routes/mcp.js";
 
 const app = new Hono<{ Variables: JwtVariables }>();
 
@@ -73,6 +74,10 @@ app.use("/api/admin/*", cookieAuth);
 app.route("/api/auth", authRouter);
 app.route("/api/chat", chatRouter);
 app.route("/api/admin", adminRouter);
+
+// MCP HTTP/SSE transport — outside /api/* middleware chain.
+// Uses its own Bearer token auth via TEAM_API_KEY.
+app.route("/mcp", mcpRouter);
 
 app.get("/api/health", async (c) => {
   const checks = { database: false, redis: false, qdrant: false };
@@ -198,6 +203,7 @@ async function shutdown(signal: string): Promise<void> {
   }, 30_000).unref();
 
   httpServer?.close();
+  await mcpServer.close().catch(() => {});
   await indexWorker?.close().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});

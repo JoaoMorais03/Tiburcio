@@ -159,9 +159,22 @@ Wait for all services to become healthy (`docker compose ps`), then open **http:
 
 ### Connect Claude Code
 
+**Option 1: Local (stdio) — for solo development:**
+
 ```bash
 cd backend
 claude mcp add tiburcio -- npx tsx src/mcp.ts
+```
+
+**Option 2: HTTP/SSE — for shared team deployment:**
+
+Set `TEAM_API_KEY` in your `.env`, then each developer connects:
+
+```bash
+claude mcp add tiburcio \
+  --transport sse \
+  --url http://your-server:3000/mcp/sse \
+  --header "Authorization:Bearer <team-api-key>"
 ```
 
 Claude Code now has 8 specialized tools. Ask it anything about your codebase.
@@ -248,7 +261,7 @@ pnpm index:architecture
 
 | Layer | Technology |
 |-------|-----------|
-| **MCP Server** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio transport, 8 tools) |
+| **MCP Server** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio + HTTP/SSE transport, 8 tools) |
 | **Agent** | [Mastra](https://mastra.ai) AI framework |
 | **LLM** | OpenRouter (MiniMax M2.5) or Ollama (Qwen3 8B) — provider-agnostic |
 | **Embeddings** | OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dims) or Ollama (`nomic-embed-text`, 768 dims) |
@@ -301,8 +314,8 @@ tiburcio/
         workflows/     # Nightly review workflow
         infra.ts       # Shared singletons (qdrant, models, clients)
       middleware/       # Rate limiters (global, auth, chat)
-      routes/          # HTTP routes (auth, chat, admin)
-      mcp.ts           # MCP stdio server for Claude Code
+      routes/          # HTTP routes (auth, chat, admin, MCP SSE)
+      mcp.ts           # MCP stdio server for local Claude Code
       server.ts        # HTTP server entry point
     scripts/           # CLI indexing scripts
   frontend/
@@ -356,6 +369,12 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 | `PORT` | No | `3000` | Backend server port |
 | `NODE_ENV` | No | `development` | Environment mode |
 | `CORS_ORIGINS` | No | `localhost:5173,5174` | Comma-separated allowed origins |
+
+### MCP HTTP/SSE Transport
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TEAM_API_KEY` | For HTTP MCP | — | Bearer token for MCP SSE auth (`openssl rand -base64 32`) |
 
 ### Codebase Indexing
 
