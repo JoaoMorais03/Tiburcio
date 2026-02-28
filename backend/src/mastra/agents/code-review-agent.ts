@@ -3,8 +3,7 @@
 
 import { Agent } from "@mastra/core/agent";
 
-import { env } from "../../config/env.js";
-import { openrouter } from "../infra.js";
+import { chatModel } from "../infra.js";
 import { searchCode } from "../tools/search-code.js";
 import { searchStandards } from "../tools/search-standards.js";
 
@@ -57,6 +56,6 @@ Example:
     "text": "Good use of the repository pattern for database access, consistent with existing service layer conventions."
   }
 ]`,
-  model: openrouter(env.OPENROUTER_MODEL),
+  model: chatModel,
   tools: { searchStandards, searchCode },
 });

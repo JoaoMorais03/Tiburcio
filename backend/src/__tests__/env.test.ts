@@ -26,6 +26,12 @@ const validEnv = {
   JWT_SECRET: "a-secret-that-is-at-least-32-chars-long!!",
 };
 
+const ollamaEnv = {
+  DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+  MODEL_PROVIDER: "ollama",
+  JWT_SECRET: "a-secret-that-is-at-least-32-chars-long!!",
+};
+
 describe("envSchema", () => {
   it("parses a valid minimal env with correct defaults", () => {
     const result = envSchema.safeParse(validEnv);
@@ -38,6 +44,7 @@ describe("envSchema", () => {
       expect(result.data.OPENROUTER_MODEL).toBe("minimax/minimax-m2.5");
       expect(result.data.EMBEDDING_MODEL).toBe("qwen/qwen3-embedding-8b");
       expect(result.data.CORS_ORIGINS).toBe("http://localhost:5173,http://localhost:5174");
+      expect(result.data.MODEL_PROVIDER).toBe("openrouter");
     }
   });
 
@@ -49,9 +56,36 @@ describe("envSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("fails when OPENROUTER_API_KEY is empty", () => {
+  it("fails when OPENROUTER_API_KEY is empty with openrouter provider", () => {
     const result = envSchema.safeParse({ ...validEnv, OPENROUTER_API_KEY: "" });
     expect(result.success).toBe(false);
+  });
+
+  it("fails when OPENROUTER_API_KEY is missing with openrouter provider", () => {
+    const result = envSchema.safeParse({
+      ...validEnv,
+      OPENROUTER_API_KEY: undefined,
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("allows missing OPENROUTER_API_KEY with ollama provider", () => {
+    const result = envSchema.safeParse(ollamaEnv);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.MODEL_PROVIDER).toBe("ollama");
+      expect(result.data.OLLAMA_BASE_URL).toBe("http://localhost:11434");
+      expect(result.data.OLLAMA_CHAT_MODEL).toBe("qwen3:8b");
+      expect(result.data.OLLAMA_EMBEDDING_MODEL).toBe("nomic-embed-text");
+    }
+  });
+
+  it("defaults MODEL_PROVIDER to openrouter", () => {
+    const result = envSchema.safeParse(validEnv);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.MODEL_PROVIDER).toBe("openrouter");
+    }
   });
 
   it("fails when JWT_SECRET is shorter than 32 characters", () => {
@@ -89,6 +123,14 @@ describe("envSchema", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.CODEBASE_REPOS).toBeUndefined();
+    }
+  });
+
+  it("coerces EMBEDDING_DIMENSIONS to number", () => {
+    const result = envSchema.safeParse({ ...validEnv, EMBEDDING_DIMENSIONS: "768" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.EMBEDDING_DIMENSIONS).toBe(768);
     }
   });
 });

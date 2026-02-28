@@ -48,7 +48,7 @@ const incrementalReindexStep = createStep({
       return { filesIndexed: 0, chunksIndexed: 0 };
     }
 
-    await ensureCollection(COLLECTION, 4096, true);
+    await ensureCollection(COLLECTION, undefined, true);
     try {
       await rawQdrant.createPayloadIndex(COLLECTION, {
         field_name: "repo",

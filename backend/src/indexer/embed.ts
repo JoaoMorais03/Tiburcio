@@ -1,17 +1,11 @@
-// indexer/embed.ts — Embedding utilities (OpenRouter text-embedding-3-small via AI SDK).
+// indexer/embed.ts — Embedding utilities (provider-agnostic via AI SDK).
+// Model configured in mastra/infra.ts based on MODEL_PROVIDER.
 
 import { createHash } from "node:crypto";
 import { embed, embedMany } from "ai";
 
-import { env } from "../config/env.js";
-import { openrouter } from "../mastra/infra.js";
+import { embeddingModel } from "../mastra/infra.js";
 import { redactSecrets } from "./redact.js";
-
-const embeddingModel = openrouter.textEmbeddingModel(env.EMBEDDING_MODEL, {
-  provider: {
-    only: [env.EMBEDDING_PROVIDER],
-  },
-});
 
 /** Convert an arbitrary string into a deterministic UUID (v5-style) for Qdrant point IDs. */
 export function toUUID(input: string): string {

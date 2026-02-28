@@ -262,7 +262,7 @@ export async function indexCodebase(
   if (sourceFiles.length === 0) return { files: 0, chunks: 0 };
 
   // Create collection FIRST so upserts work immediately
-  await ensureCollection(COLLECTION, 4096, true);
+  await ensureCollection(COLLECTION, undefined, true);
   try {
     await rawQdrant.createPayloadIndex(COLLECTION, {
       field_name: "repo",

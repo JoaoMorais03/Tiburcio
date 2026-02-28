@@ -6,13 +6,8 @@
 
 import { generateText } from "ai";
 
-import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { openrouter } from "../mastra/infra.js";
-
-const model = openrouter.chat(env.OPENROUTER_MODEL, {
-  provider: { only: [env.OPENROUTER_PROVIDER] },
-});
+import { chatModel } from "../mastra/infra.js";
 
 /** Truncate file content to avoid cost explosion on large files. */
 const MAX_FILE_CHARS = 8000;
@@ -50,7 +45,7 @@ export async function contextualizeChunk(
 
   try {
     const { text } = await generateText({
-      model,
+      model: chatModel,
       prompt,
       maxOutputTokens: 150,
       temperature: 0,

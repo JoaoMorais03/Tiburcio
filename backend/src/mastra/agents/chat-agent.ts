@@ -1,10 +1,9 @@
-// mastra/agents/chat-agent.ts — Chat agent (MiniMax M2.5 via OpenRouter).
+// mastra/agents/chat-agent.ts — Chat agent (provider-agnostic via infra.ts).
 
 import { Agent } from "@mastra/core/agent";
 import { UnicodeNormalizer } from "@mastra/core/processors";
 
-import { env } from "../../config/env.js";
-import { openrouter } from "../infra.js";
+import { chatModel } from "../infra.js";
 import { memory } from "../memory.js";
 import { getArchitecture } from "../tools/get-architecture.js";
 import { getPattern } from "../tools/get-pattern.js";
@@ -54,9 +53,7 @@ STRICT PROHIBITIONS:
 - NEVER mention documents by name unless a tool returned them.
 - NEVER claim "I found X results" if tools returned empty results.
 - NEVER generate code examples that aren't from tool results unless explicitly asked to write new code.`,
-  model: openrouter.chat(env.OPENROUTER_MODEL, {
-    provider: { only: [env.OPENROUTER_PROVIDER] },
-  }),
+  model: chatModel,
   tools: {
     searchStandards,
     getPattern,

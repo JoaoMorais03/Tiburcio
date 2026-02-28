@@ -129,11 +129,15 @@ async function start(): Promise<void> {
 
   // Embedding model migration: if the model changed, drop all collections
   // so they get re-indexed with the new embedding dimensions/space.
+  const currentEmbeddingId =
+    env.MODEL_PROVIDER === "ollama"
+      ? `ollama:${env.OLLAMA_EMBEDDING_MODEL}`
+      : `openrouter:${env.EMBEDDING_MODEL}`;
   try {
     const prevModel = await redis.get("tiburcio:embedding-model");
-    if (prevModel && prevModel !== env.EMBEDDING_MODEL) {
+    if (prevModel && prevModel !== currentEmbeddingId) {
       logger.warn(
-        { previous: prevModel, current: env.EMBEDDING_MODEL },
+        { previous: prevModel, current: currentEmbeddingId },
         "Embedding model changed — dropping all collections for re-indexing",
       );
       const collections = await qdrant.listIndexes();
@@ -141,7 +145,7 @@ async function start(): Promise<void> {
         await qdrant.deleteIndex({ indexName: name });
       }
     }
-    await redis.set("tiburcio:embedding-model", env.EMBEDDING_MODEL);
+    await redis.set("tiburcio:embedding-model", currentEmbeddingId);
   } catch (err) {
     logger.warn({ err }, "Could not check embedding model migration");
   }
