@@ -1,12 +1,13 @@
 <h1 align="center">Tiburcio</h1>
 
 <p align="center">
-  <strong>The onboarding agent that learns your codebase overnight.</strong>
+  <strong>Developer intelligence layer for Claude Code.</strong><br/>
+  <em>Makes your AI coding assistant actually understand your codebase, conventions, and what changed overnight.</em>
 </p>
 
 <p align="center">
   <a href="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml"><img src="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.2.1-brightgreen.svg" alt="v1.2.1" /></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-2.0.0-brightgreen.svg" alt="v2.0.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-green.svg" alt="Node.js" /></a>
@@ -14,7 +15,7 @@
 
 <p align="center">
   <a href="#quick-start">Quick Start</a> &middot;
-  <a href="#mcp-server">MCP Server</a> &middot;
+  <a href="#mcp-tools">MCP Tools</a> &middot;
   <a href="#how-it-works">How It Works</a> &middot;
   <a href="#configuration">Configuration</a> &middot;
   <a href="docs/CONTRIBUTING.md">Contributing</a>
@@ -22,25 +23,32 @@
 
 ---
 
-Tiburcio indexes your docs, standards, and source code into a vector database — then answers developer questions grounded in your actual codebase. Every night it re-indexes what changed, reviews yesterday's merges against your team's conventions, and generates test suggestions.
+Tiburcio is an MCP server that gives Claude Code deep context about your codebase. It indexes your standards, architecture docs, source code, and DB schemas into a vector database — then exposes 8 specialized tools that return focused, token-efficient answers. Every night it reviews yesterday's merges against your team's conventions and generates test suggestions.
 
-Works as a **web chat UI** for onboarding conversations and as an **MCP server** so Claude Code can query the same knowledge while you code.
+**The result**: Claude Code stops guessing and starts answering from your actual codebase.
 
 ---
 
-## Why?
+## The Problem
 
-Every team has the same problem: tribal knowledge lives in people's heads, in Slack threads, in docs that nobody updates. New developers join and ask the same questions. Senior developers become bottlenecks.
+Claude Code is powerful but generic. It doesn't know:
+- Your team's coding conventions
+- Your system architecture and how components connect
+- What changed in the codebase yesterday
+- Which merges broke your team's standards
+- How your team actually writes tests
 
-Tiburcio fixes this by creating a **living knowledge base** that:
+Developers end up repeating context in every prompt, or Claude Code produces code that doesn't match team conventions.
 
-- **Indexes your codebase** — standards, architecture docs, source code, DB schemas
-- **Answers questions with citations** — *"According to your auth-flow.md, the JWT token..."*
-- **Stays fresh automatically** — nightly re-indexing of code merged to develop
-- **Reviews changes against your conventions** — knows when yesterday's merge broke a team standard
-- **Suggests tests for new code** — grounded in how your team actually writes tests
+## The Solution
 
-The result: a new developer asks *"how do we handle errors in this codebase?"* and gets an answer pulled from your actual conventions doc and real code examples — not a hallucination.
+Tiburcio bridges this gap by acting as a **codebase intelligence layer** between Claude Code and your team's knowledge:
+
+- **8 MCP tools** that return compact, focused answers (300-1,500 tokens per call, not 8,000)
+- **Nightly intelligence** — reviews merges against conventions, generates test scaffolds, flags critical issues
+- **Morning briefings** — "here's what changed overnight, here are the problems"
+- **Convention enforcement** — Claude Code checks standards before writing code
+- **Always grounded** — every answer comes from your actual docs and code, never hallucinated
 
 ---
 
@@ -49,13 +57,13 @@ The result: a new developer asks *"how do we handle errors in this codebase?"* a
 ```mermaid
 graph LR
     subgraph Clients
+        CC["Claude Code (MCP)"]
         UI["Chat UI (Vue 3)"]
-        CC["Claude Code"]
     end
 
     subgraph Tiburcio
-        Agent["Mastra AI Agent"]
-        Tools["7 RAG Tools"]
+        MCP["MCP Server (8 tools)"]
+        Agent["AI Agent"]
     end
 
     subgraph Storage
@@ -64,18 +72,28 @@ graph LR
         Redis["Redis"]
     end
 
-    UI -- SSE --> Agent
-    CC -- MCP stdio --> Agent
-    Agent --> Tools --> Qdrant
+    CC -- MCP stdio --> MCP --> Qdrant
+    UI -- SSE --> Agent --> Qdrant
     Agent --> PG
     Agent --> Redis
 ```
 
-### Day Mode — Answer Questions
+### Day Mode — Intelligence on Demand
 
-A developer asks a question via the chat UI or Claude Code. The AI agent picks the right RAG tool, queries Qdrant vectors with hybrid search (dense + BM25 RRF fusion), and returns an answer grounded in your actual documentation and code.
+Claude Code calls MCP tools as needed. Each tool returns a focused, token-efficient response:
 
-### Night Mode — Learn What Changed
+```
+Developer: "Write a new API endpoint for user preferences"
+
+Claude Code (via MCP):
+1. searchStandards → team's endpoint conventions (compact: 3 results, ~400 tokens)
+2. getPattern → "new-api-endpoint" template (~600 tokens)
+3. searchCode → existing similar endpoints (~500 tokens)
+
+→ Writes code that matches YOUR conventions, YOUR patterns, YOUR architecture.
+```
+
+### Night Mode — Overnight Intelligence
 
 ```mermaid
 flowchart LR
@@ -85,10 +103,22 @@ flowchart LR
     D --> E["Generate Test Suggestions"]
 ```
 
-1. **Re-indexes** files that changed since the last run (incremental, not full rebuild)
+1. **Re-indexes** files that changed since the last run
 2. **Cleans up** stale vectors for deleted/modified files
-3. **Reviews** yesterday's merges against your team's conventions
-4. **Generates test suggestions** for new/changed code
+3. **Reviews** yesterday's merges against team conventions — flags bugs, security issues, and standards violations
+4. **Generates test suggestions** grounded in how your team actually writes tests
+
+### Morning Briefing
+
+```
+Developer: "What should I know this morning?"
+
+Claude Code (via MCP):
+1. getNightlySummary → "3 merges reviewed, 1 CRITICAL issue in PaymentService,
+   2 warnings, 2 files need tests"
+
+→ Developer knows exactly what needs attention before writing a single line of code.
+```
 
 ---
 
@@ -98,70 +128,87 @@ flowchart LR
 
 - [Node.js](https://nodejs.org/) 22+ and [pnpm](https://pnpm.io/) 10+
 - [Docker](https://www.docker.com/) and Docker Compose
-- An [OpenRouter](https://openrouter.ai/) API key
+- One of:
+  - [OpenRouter](https://openrouter.ai/) API key (cloud inference)
+  - [Ollama](https://ollama.ai/) (local inference, zero API calls)
 
-### Run
+### Option A: Cloud Models (OpenRouter)
 
 ```bash
 git clone https://github.com/JoaoMorais03/tiburcio.git
 cd tiburcio
 cp .env.example .env
-# Edit .env — set OPENROUTER_API_KEY (get one at https://openrouter.ai)
+# Edit .env — set OPENROUTER_API_KEY
 docker compose up -d
 ```
 
-Wait for all services to become healthy (`docker compose ps`), then open **http://localhost:5174**. Database migrations run automatically on first boot.
-
-Register a user and start chatting. On first boot, Tiburcio auto-indexes the bundled standards and architecture docs. If `CODEBASE_REPOS` is set, it also queues a full codebase index.
-
-### Development Mode
+### Option B: Local Models (Ollama)
 
 ```bash
-pnpm install
-docker compose up db redis qdrant -d
-cp .env.example .env              # set OPENROUTER_API_KEY
-cd backend && pnpm db:migrate     # run database migrations
-cd .. && pnpm dev                 # backend + frontend dev servers
+git clone https://github.com/JoaoMorais03/tiburcio.git
+cd tiburcio
+cp .env.example .env
+# Edit .env — set MODEL_PROVIDER=ollama (no API key needed)
+docker compose --profile ollama up -d
+# Pull models (first time only):
+docker exec ollama ollama pull qwen3:8b
+docker exec ollama ollama pull nomic-embed-text
 ```
 
----
+Wait for all services to become healthy (`docker compose ps`), then open **http://localhost:5174** for the chat UI. Database migrations run automatically on first boot.
 
-## MCP Server
-
-Give Claude Code access to your indexed knowledge:
+### Connect Claude Code
 
 ```bash
 cd backend
 claude mcp add tiburcio -- npx tsx src/mcp.ts
 ```
 
-Claude Code now has 7 specialized tools:
+Claude Code now has 8 specialized tools. Ask it anything about your codebase.
 
-| Tool | What It Searches | Key Filters |
-|------|-----------------|-------------|
-| `searchStandards` | Coding conventions, best practices | `category`: backend, frontend, database, integration |
-| `searchCode` | Indexed source code by semantic meaning | `language`: java, ts, vue, sql · `layer`: 20-value enum |
-| `getArchitecture` | System architecture documentation | `area`: auth, requests, batch, notifications, ... |
-| `searchSchemas` | Database table documentation | `tableName` |
-| `searchReviews` | Nightly code review insights | `severity`: info, warning, critical · `category` |
-| `getTestSuggestions` | AI-generated test scaffolds | `language`: java, typescript, vue |
+### Development Mode
+
+```bash
+pnpm install
+docker compose up db redis qdrant -d
+cp .env.example .env              # configure your model provider
+cd backend && pnpm db:migrate     # run database migrations
+cd .. && pnpm dev                 # backend + frontend dev servers
+```
+
+---
+
+## MCP Tools
+
+8 tools, each designed to return focused answers (compact mode by default):
+
+| Tool | What It Does | Key Filters |
+|------|-------------|-------------|
+| `searchStandards` | Team coding conventions and best practices | `category`: backend, frontend, database, integration |
+| `searchCode` | Source code by semantic meaning (hybrid search) | `language`: java, ts, vue, sql · `layer`: 20-value enum · `repo` |
+| `getArchitecture` | System architecture and component flows | `area`: auth, requests, batch, notifications, ... |
+| `searchSchemas` | Database table documentation and relationships | `tableName` |
+| `searchReviews` | Nightly code review insights and issues | `severity`: info, warning, critical · `category` |
+| `getTestSuggestions` | AI-generated test scaffolds from nightly analysis | `language`: java, typescript, vue |
 | `getPattern` | Code templates (list or get by name) | `name` |
+| `getNightlySummary` | Morning briefing — merges, issues, test gaps | `daysBack` |
 
-Every tool uses **Qdrant RRF fusion** for ranking (dense + BM25 hybrid search), **payload truncation** to minimize Claude Code token overhead, **MCP annotations** (`readOnlyHint`, `openWorldHint`), **strict enum inputs** to prevent empty results from typos, and **recovery guidance** when no results are found (suggests alternative tools).
+### Token Efficiency
 
-### Example: Morning Workflow
+Every tool defaults to **compact mode** — minimal, focused responses optimized for Claude Code's context window:
 
-```
-You: "Let's develop tests for yesterday's merges to develop"
+| Mode | Tokens/Call | Results | Use Case |
+|------|-----------|---------|----------|
+| Compact (default) | 300-1,500 | 3 results, summaries only | MCP tool calls, quick lookups |
+| Full (`compact: false`) | 2,000-8,000 | 5-8 results, complete content | Deep dives, detailed analysis |
 
-Claude Code (via MCP):
-1. searchReviews → finds 3 merges: auth refactor, payment endpoint, user validation
-2. getTestSuggestions → gets test scaffolds grounded in your Vitest patterns
-3. searchCode → finds existing test files for similar modules
-4. searchStandards → checks your testing conventions
+### Design Principles
 
-→ Writes test files grounded in YOUR conventions, YOUR patterns, YOUR code.
-```
+- **Compass, not encyclopedia** — point Claude Code to the right answer, don't dump the entire doc
+- **Recovery guidance** — every empty result suggests alternative tools or search terms
+- **MCP annotations** — all tools declare `readOnlyHint: true` + `openWorldHint: false`
+- **Hybrid search** — dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
+- **Payload truncation** — large fields capped to reduce token overhead
 
 ---
 
@@ -201,32 +248,30 @@ pnpm index:architecture
 
 | Layer | Technology |
 |-------|-----------|
-| **Agent** | [Mastra](https://mastra.ai) + MiniMax M2.5 via [OpenRouter](https://openrouter.ai) |
-| **Embeddings** | `qwen/qwen3-embedding-8b` via OpenRouter (4096 dims, MTEB Code 80.68) |
+| **MCP Server** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio transport, 8 tools) |
+| **Agent** | [Mastra](https://mastra.ai) AI framework |
+| **LLM** | OpenRouter (MiniMax M2.5) or Ollama (Qwen3 8B) — provider-agnostic |
+| **Embeddings** | OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dims) or Ollama (`nomic-embed-text`, 768 dims) |
 | **Ranking** | Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) |
 | **Vector DB** | [Qdrant](https://qdrant.tech) — 6 collections, cosine similarity |
 | **Backend** | [Hono](https://hono.dev) + Node.js 22 |
 | **Frontend** | [Vue 3](https://vuejs.org) + Vite + Tailwind CSS v4 |
 | **Database** | PostgreSQL 17 + [Drizzle ORM](https://orm.drizzle.team) |
 | **Auth** | httpOnly cookie JWT (HS256) + refresh token rotation + bcrypt |
-| **Sanitization** | [DOMPurify](https://github.com/cure53/DOMPurify) on all rendered markdown |
-| **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis |
-| **Observability** | [Langfuse](https://langfuse.com) (self-hosted) |
-| **MCP** | [@mastra/mcp](https://mastra.ai/docs/mcp) (stdio transport) |
-| **Testing** | [Vitest](https://vitest.dev) — 162 tests (132 backend + 30 frontend) |
+| **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis (nightly cron) |
+| **Observability** | [Langfuse](https://langfuse.com) (self-hosted, optional) |
+| **Testing** | [Vitest](https://vitest.dev) — 166 tests (136 backend + 30 frontend) |
 
 ### Qdrant Collections
 
-All 4096-dimensional vectors via `qwen/qwen3-embedding-8b`.
-
-| Collection | What's Indexed |
-|-----------|----------------|
-| `standards` | Team conventions, best practices |
-| `code-chunks` | Source code — AST chunking (tree-sitter) + hybrid search (dense + BM25 RRF) |
-| `architecture` | System architecture docs |
-| `schemas` | Database table documentation |
-| `reviews` | Nightly code review insights |
-| `test-suggestions` | AI-generated test scaffolds |
+| Collection | What's Indexed | Search Type |
+|-----------|----------------|-------------|
+| `standards` | Team conventions, best practices | Dense |
+| `code-chunks` | Source code (AST chunking via tree-sitter) | Hybrid (dense + BM25 RRF) |
+| `architecture` | System architecture docs | Dense |
+| `schemas` | Database table documentation | Dense |
+| `reviews` | Nightly code review insights | Dense |
+| `test-suggestions` | AI-generated test scaffolds | Dense |
 
 ### Services
 
@@ -237,7 +282,8 @@ All 4096-dimensional vectors via `qwen/qwen3-embedding-8b`.
 | PostgreSQL | 5555 | Users, conversations, messages |
 | Qdrant | 6333 | Vector search + dashboard |
 | Redis | 6379 | Rate limiting + job queues |
-| Langfuse | 3001 | LLM observability |
+| Langfuse | 3001 | LLM observability (optional) |
+| Ollama | 11434 | Local inference (optional, `--profile ollama`) |
 
 ### Project Structure
 
@@ -247,13 +293,13 @@ tiburcio/
     src/
       config/          # Environment, logger, Redis client
       db/              # Drizzle schema, connection, migrations
-      indexer/         # Code chunker, embedding, reranking, indexing pipelines
+      indexer/         # Code chunker, embedding, indexing pipelines
       jobs/            # BullMQ background jobs + nightly cron
       mastra/
         agents/        # Chat agent + code review agent
-        tools/         # 7 RAG tools (Qdrant vector search)
+        tools/         # 8 RAG tools (Qdrant vector search)
         workflows/     # Nightly review workflow
-        infra.ts       # Shared singletons (qdrant, openrouter)
+        infra.ts       # Shared singletons (qdrant, models, clients)
       middleware/       # Rate limiters (global, auth, chat)
       routes/          # HTTP routes (auth, chat, admin)
       mcp.ts           # MCP stdio server for Claude Code
@@ -275,23 +321,55 @@ tiburcio/
 
 All configuration via environment variables. See [`.env.example`](.env.example) for the full list.
 
+### Model Provider
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `OPENROUTER_API_KEY` | **Yes** | — | API key for LLM and embeddings |
-| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string |
-| `JWT_SECRET` | **Yes** | — | Min 32 chars (`openssl rand -base64 32`) |
+| `MODEL_PROVIDER` | No | `openrouter` | `openrouter` (cloud) or `ollama` (local) |
+
+### OpenRouter (cloud)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENROUTER_API_KEY` | Yes (if openrouter) | — | API key from openrouter.ai |
 | `OPENROUTER_MODEL` | No | `minimax/minimax-m2.5` | Chat model ID |
 | `EMBEDDING_MODEL` | No | `qwen/qwen3-embedding-8b` | Embedding model ID |
 | `EMBEDDING_PROVIDER` | No | `nebius` | Embedding provider on OpenRouter |
+
+### Ollama (local)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | No | `http://ollama:11434` | Ollama server URL |
+| `OLLAMA_CHAT_MODEL` | No | `qwen3:8b` | Ollama chat model |
+| `OLLAMA_EMBEDDING_MODEL` | No | `nomic-embed-text` | Ollama embedding model |
+| `EMBEDDING_DIMENSIONS` | No | Auto-detected | 768 (Ollama) or 4096 (OpenRouter) |
+
+### Infrastructure
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string |
+| `JWT_SECRET` | **Yes** | — | Min 32 chars (`openssl rand -base64 32`) |
 | `REDIS_URL` | No | `redis://localhost:6379` | Redis connection string |
 | `QDRANT_URL` | No | `http://localhost:6333` | Qdrant server URL |
-| `CODEBASE_HOST_PATH` | No | — | Host path to project root (mounted as `/codebase` in container) |
-| `CODEBASE_REPOS` | No | — | Repos to index. Format: `name:path:branch` (comma-separated for multi-repo) |
 | `PORT` | No | `3000` | Backend server port |
-| `NODE_ENV` | No | `development` | Environment (`development` or `production`) |
+| `NODE_ENV` | No | `development` | Environment mode |
 | `CORS_ORIGINS` | No | `localhost:5173,5174` | Comma-separated allowed origins |
-| `LANGFUSE_PUBLIC_KEY` | No | — | Langfuse observability public key |
-| `LANGFUSE_SECRET_KEY` | No | — | Langfuse observability secret key |
+
+### Codebase Indexing
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CODEBASE_HOST_PATH` | No | — | Host path to project root (Docker volume mount) |
+| `CODEBASE_REPOS` | No | — | Repos to index: `name:path:branch` (comma-separated) |
+
+### Observability
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LANGFUSE_PUBLIC_KEY` | No | — | Langfuse public key |
+| `LANGFUSE_SECRET_KEY` | No | — | Langfuse secret key |
 | `LANGFUSE_BASE_URL` | No | `http://langfuse:3000` | Langfuse server URL |
 
 ### Default Credentials
@@ -306,7 +384,7 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 ## Testing
 
 ```bash
-cd backend && pnpm test    # 132 tests
+cd backend && pnpm test    # 136 tests
 cd frontend && pnpm test   # 30 tests
 cd backend && pnpm check   # biome lint + tsc
 cd frontend && pnpm check  # biome lint + vue-tsc
@@ -318,14 +396,12 @@ All tests run with mocks — no external services needed.
 
 ## Roadmap
 
-See [`docs/V2_PLAN.md`](docs/V2_PLAN.md) for the active v2.0 roadmap:
+See [`docs/V2_PLAN.md`](docs/V2_PLAN.md) for the active roadmap:
 
 - **Event-Driven Freshness** — webhook-triggered indexing, <10 min freshness guarantee
-- **Nightly Intelligence** — convention scoring, drift reports, change summaries
-- **Shared Team Deployment** — HTTP/SSE MCP transport, git clone support, one pod for the team
-- **Convention Guardian** — active monitoring with scoring, tracking, and reporting
-
-See [`docs/FUTURE_IMPROVEMENTS.md`](docs/FUTURE_IMPROVEMENTS.md) for the original v1.x roadmap (historical reference).
+- **MCP HTTP/SSE Transport** — shared team deployment, one pod for the whole team
+- **Convention Guardian** — convention scoring, drift tracking, weekly reports
+- **Nightly Intelligence Enhancements** — change summaries, convention drift reports
 
 ---
 

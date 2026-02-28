@@ -106,7 +106,7 @@ app.get("/api/health", async (c) => {
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.2.1" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.0.0" }));
 
 // --- MastraServer ---
 // Protect Mastra-managed routes (agent invocation, tool execution, workflows)

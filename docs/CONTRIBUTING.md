@@ -1,6 +1,6 @@
 # Contributing to Tiburcio
 
-Thanks for your interest in contributing! Tiburcio is an onboarding knowledge system — every contribution should make it easier for new developers to get productive on a codebase.
+Thanks for your interest in contributing! Tiburcio is a developer intelligence MCP — a codebase intelligence layer that makes Claude Code actually understand your team's codebase, conventions, and recent changes.
 
 ## Claude Code
 
@@ -32,15 +32,15 @@ pnpm dev  # from root — starts both backend and frontend
 
 Tiburcio operates in two modes:
 
-- **Day mode**: Answers developer questions via chat UI (Vue 3, SSE streaming) and MCP server (Claude Code integration). The Mastra AI agent uses 7 RAG tools to query Qdrant vector collections.
+- **Day mode**: 8 MCP tools serve Claude Code (primary) and the chat UI (secondary). Each tool returns compact, token-efficient answers from Qdrant vector collections.
 - **Night mode**: BullMQ cron jobs run at 2 AM to re-index changed files, review yesterday's merges against team standards, and generate test suggestions.
 
 Key areas of the codebase:
-- `backend/src/mastra/infra.ts` — Shared singletons (qdrant, openrouter, ensureCollection)
+- `backend/src/mastra/infra.ts` — Shared singletons (qdrant, models, ensureCollection)
 - `backend/src/mastra/agents/` — Chat agent + code review agent
-- `backend/src/mastra/tools/` — 7 RAG tools (Qdrant vector search)
+- `backend/src/mastra/tools/` — 8 RAG tools (Qdrant vector search, compact mode default)
 - `backend/src/mastra/workflows/` — Nightly review workflow (multi-step)
-- `backend/src/indexer/` — Code chunking, embedding (via OpenRouter), indexing pipelines
+- `backend/src/indexer/` — Code chunking, embedding, indexing pipelines
 - `backend/src/jobs/` — BullMQ background jobs and nightly cron schedule
 - `backend/src/routes/` — HTTP endpoints (auth, chat SSE, admin)
 - `frontend/src/stores/` — Pinia state management (auth, chat, rate-limit)
@@ -61,7 +61,7 @@ cd frontend && pnpm check
 ## Running Tests
 
 ```bash
-# Backend tests (132 tests, no external deps needed)
+# Backend tests (136 tests, no external deps needed)
 cd backend && pnpm test
 
 # Frontend tests (30 tests)
@@ -117,10 +117,15 @@ test: add admin route integration tests
 
 ## Areas Where Contributions Are Welcome
 
-### Onboarding Intelligence (High Impact)
-- Learning path generation for new developers
-- "What did I miss?" change summaries
-- Convention adherence dashboards
+### Nightly Intelligence (High Impact)
+- Convention adherence scoring and drift reports
+- Change summaries ("what did I miss?")
+- Enhanced test suggestion quality
+
+### MCP & Developer Experience
+- HTTP/SSE MCP transport for shared team deployment
+- Additional MCP tools (getChangeSummary, getConventionReport, getIndexStatus)
+- Token efficiency improvements across all tools
 
 ### Knowledge & RAG
 - Improved chunking strategies (more languages, better boundaries)
@@ -128,13 +133,9 @@ test: add admin route integration tests
 - Knowledge gap detection (under-documented code areas)
 
 ### Infrastructure
-- CI/CD pipeline (GitHub Actions for tests, lint, type-check)
-- Notification webhooks (Slack/Discord summaries from nightly pipeline)
-
-### Security
-- CSP headers for production deployment
-- Rate limit tuning per endpoint
-- Audit logging for admin actions
+- Webhook-triggered incremental indexing
+- Git clone support for remote repos
+- Notification integrations (Slack/Discord summaries from nightly pipeline)
 
 ## Reporting Bugs
 
