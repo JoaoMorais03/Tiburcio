@@ -27,10 +27,17 @@ export const searchStandards = createTool({
       .enum(["backend", "frontend", "database", "integration"])
       .optional()
       .describe("Filter by category to narrow results"),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns top 3 results. When false, returns top 5. " +
+          "Standards content is always included in full (convention docs are short and directly useful).",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, category } = inputData;
+    const { query, category, compact } = inputData;
 
     const embedding = await embedText(query);
 
@@ -42,7 +49,7 @@ export const searchStandards = createTool({
       const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 5,
+        topK: compact ? 3 : 5,
         filter,
       });
 

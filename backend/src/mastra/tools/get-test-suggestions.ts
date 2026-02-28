@@ -26,10 +26,17 @@ export const getTestSuggestions = createTool({
       .enum(["java", "typescript", "vue"])
       .optional()
       .describe("Filter by programming language"),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns targetFile, language, and test name pointer. " +
+          "When false, returns full test scaffold suggestion.",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, language } = inputData;
+    const { query, language, compact } = inputData;
 
     const textToEmbed = [language, query].filter(Boolean).join(" ");
     const embedding = await embedText(textToEmbed);
@@ -43,7 +50,7 @@ export const getTestSuggestions = createTool({
       const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 5,
+        topK: compact ? 3 : 5,
         filter,
       });
 
@@ -59,11 +66,13 @@ export const getTestSuggestions = createTool({
 
       return {
         results: results.map((r) => ({
-          suggestion: truncate((r.metadata?.text as string) ?? "", 2000),
+          suggestion: compact
+            ? truncate((r.metadata?.text as string) ?? "", 200)
+            : truncate((r.metadata?.text as string) ?? "", 2000),
           targetFile: r.metadata?.targetFile ?? "unknown",
           testType: r.metadata?.testType ?? "unit",
           language: r.metadata?.language ?? "unknown",
-          commitSha: r.metadata?.commitSha ?? "",
+          ...(compact ? {} : { commitSha: r.metadata?.commitSha ?? "" }),
           date: r.metadata?.date ?? "",
           score: r.score ?? 0,
         })),

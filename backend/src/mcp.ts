@@ -3,6 +3,7 @@
 
 import { MCPServer } from "@mastra/mcp";
 import { getArchitecture } from "./mastra/tools/get-architecture.js";
+import { getNightlySummary } from "./mastra/tools/get-nightly-summary.js";
 import { getPattern } from "./mastra/tools/get-pattern.js";
 import { getTestSuggestions } from "./mastra/tools/get-test-suggestions.js";
 import { searchCode } from "./mastra/tools/search-code.js";
@@ -13,7 +14,7 @@ import { searchStandards } from "./mastra/tools/search-standards.js";
 const server = new MCPServer({
   id: "tiburcio",
   name: "Tiburcio MCP",
-  version: "1.2.1",
+  version: "2.0.0",
   tools: {
     searchStandards,
     getPattern,
@@ -22,6 +23,7 @@ const server = new MCPServer({
     searchSchemas,
     searchReviews,
     getTestSuggestions,
+    getNightlySummary,
   },
 });
 

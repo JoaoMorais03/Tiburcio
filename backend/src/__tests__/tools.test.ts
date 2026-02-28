@@ -90,6 +90,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/search-standards.js", {
         query: "error handling",
+        compact: false,
       });
 
       // Verify embedText was actually called with the query
@@ -203,6 +204,7 @@ describe("RAG tools", () => {
         query: "create user",
         language: "java",
         layer: "service",
+        compact: false,
       });
 
       // Verify embedding was called with language+layer+query
@@ -258,6 +260,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/search-code.js", {
         query: "big function",
+        compact: false,
       });
 
       const results = result.results as Record<string, unknown>[];
@@ -349,6 +352,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/search-schemas.js", {
         query: "request table",
+        compact: false,
       });
 
       expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ indexName: "schemas" }));
@@ -393,6 +397,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "payment issues",
+        compact: false,
       });
 
       expect(embedText).toHaveBeenCalledWith("payment issues");
@@ -452,6 +457,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "anything",
+        compact: false,
       });
       const results = result.results as Record<string, unknown>[];
 
@@ -500,6 +506,7 @@ describe("RAG tools", () => {
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "payment service",
         language: "java",
+        compact: false,
       });
 
       expect(embedText).toHaveBeenCalledWith("java payment service");
@@ -538,6 +545,7 @@ describe("RAG tools", () => {
 
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "anything",
+        compact: false,
       });
       const results = result.results as Record<string, unknown>[];
 

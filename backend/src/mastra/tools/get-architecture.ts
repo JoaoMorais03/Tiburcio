@@ -35,10 +35,17 @@ export const getArchitecture = createTool({
       ])
       .optional()
       .describe("Filter by architecture area to narrow results"),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns title + summary + keyFiles pointers. " +
+          "When false, returns full architecture document content.",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, area } = inputData;
+    const { query, area, compact } = inputData;
 
     const embedding = await embedText(query);
 
@@ -48,7 +55,7 @@ export const getArchitecture = createTool({
       const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 5,
+        topK: compact ? 3 : 5,
         filter,
       });
 
@@ -64,13 +71,16 @@ export const getArchitecture = createTool({
       }
 
       return {
-        results: results.map((r) => ({
-          title: r.metadata?.title ?? "Untitled",
-          area: r.metadata?.area ?? "unknown",
-          content: truncate((r.metadata?.text as string) ?? "", 2000),
-          keyFiles: r.metadata?.keyFiles ?? [],
-          score: r.score ?? 0,
-        })),
+        results: results.map((r) => {
+          const text = (r.metadata?.text as string) ?? "";
+          return {
+            title: r.metadata?.title ?? "Untitled",
+            area: r.metadata?.area ?? "unknown",
+            content: compact ? truncate(text, 200) : truncate(text, 2000),
+            keyFiles: r.metadata?.keyFiles ?? [],
+            score: r.score ?? 0,
+          };
+        }),
       };
     } catch (err) {
       logger.error({ err, collection: COLLECTION }, "Tool query failed");

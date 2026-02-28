@@ -33,10 +33,17 @@ export const searchReviews = createTool({
       .enum(["convention", "bug", "security", "pattern", "architecture"])
       .optional()
       .describe("Filter by review category"),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns severity, category, filePath, and 1-line summary. " +
+          "When false, returns full review text with commit details.",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, severity, category } = inputData;
+    const { query, severity, category, compact } = inputData;
 
     const embedding = await embedText(query);
 
@@ -50,7 +57,7 @@ export const searchReviews = createTool({
       const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 8,
+        topK: compact ? 3 : 8,
         filter,
       });
 
@@ -61,6 +68,19 @@ export const searchReviews = createTool({
             "No review insights found. The nightly review may not have run yet. " +
             (severity || category ? "Try removing the severity/category filter. " : "") +
             "Try searchCode for the actual code, or getTestSuggestions for test scaffolds.",
+        };
+      }
+
+      if (compact) {
+        return {
+          results: results.map((r) => ({
+            severity: r.metadata?.severity ?? "info",
+            category: r.metadata?.category ?? "unknown",
+            filePath: r.metadata?.filePath ?? "unknown",
+            summary: truncate((r.metadata?.text as string) ?? "", 150),
+            date: r.metadata?.date ?? "",
+            score: r.score ?? 0,
+          })),
         };
       }
 

@@ -25,10 +25,17 @@ export const searchSchemas = createTool({
       .string()
       .optional()
       .describe("Filter by exact table name if known, e.g. 'request', 'project'"),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns table name, columns list, and brief description. " +
+          "When false, returns full schema documentation.",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, tableName } = inputData;
+    const { query, tableName, compact } = inputData;
 
     const embedding = await embedText(query);
 
@@ -40,7 +47,7 @@ export const searchSchemas = createTool({
       const results = await qdrant.query({
         indexName: COLLECTION,
         queryVector: embedding,
-        topK: 5,
+        topK: compact ? 3 : 5,
         filter,
       });
 
@@ -58,9 +65,11 @@ export const searchSchemas = createTool({
         results: results.map((r) => ({
           tableName: r.metadata?.tableName ?? "unknown",
           description: r.metadata?.description ?? "",
-          content: truncate((r.metadata?.text as string) ?? ""),
+          content: compact
+            ? truncate((r.metadata?.text as string) ?? "", 300)
+            : truncate((r.metadata?.text as string) ?? ""),
           relations: r.metadata?.relations ?? [],
-          indexes: r.metadata?.indexes ?? [],
+          indexes: compact ? [] : (r.metadata?.indexes ?? []),
           score: r.score ?? 0,
         })),
       };

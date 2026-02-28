@@ -6,6 +6,7 @@ import { UnicodeNormalizer } from "@mastra/core/processors";
 import { chatModel } from "../infra.js";
 import { memory } from "../memory.js";
 import { getArchitecture } from "../tools/get-architecture.js";
+import { getNightlySummary } from "../tools/get-nightly-summary.js";
 import { getPattern } from "../tools/get-pattern.js";
 import { getTestSuggestions } from "../tools/get-test-suggestions.js";
 import { searchCode } from "../tools/search-code.js";
@@ -62,6 +63,7 @@ STRICT PROHIBITIONS:
     searchSchemas,
     searchReviews,
     getTestSuggestions,
+    getNightlySummary,
   },
   memory,
   inputProcessors: [new UnicodeNormalizer({ stripControlChars: true })],

@@ -18,8 +18,21 @@ interface QdrantPoint {
   payload?: Record<string, unknown>;
 }
 
+function mapPointToCompact(p: QdrantPoint) {
+  const m = (p.payload ?? {}) as Record<string, unknown>;
+  const text = (m.text as string) ?? "";
+  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
+  return {
+    filePath: (m.filePath as string) ?? "unknown",
+    symbolName: (m.symbolName as string) ?? null,
+    lineRange: `${(m.startLine as number) ?? 0}-${(m.endLine as number) ?? 0}`,
+    summary: truncate(firstLine, 120),
+    score: p.score ?? 0,
+  };
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat ?? chains for metadata fallbacks
-function mapPointToResult(p: QdrantPoint, headerMap: Map<string, string>) {
+function mapPointToFull(p: QdrantPoint, headerMap: Map<string, string>) {
   const m = (p.payload ?? {}) as Record<string, unknown>;
   const headerChunkId = m.headerChunkId as string | null;
   const needsHeader = headerChunkId && m.chunkType !== "header";
@@ -117,10 +130,17 @@ export const searchCode = createTool({
       ])
       .optional()
       .describe("Filter by architectural layer. For conventions, use searchStandards instead."),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns minimal metadata (filePath, symbolName, lineRange, summary). " +
+          "When false, returns full code chunks with classContext. Use compact for discovery, full for deep inspection.",
+      ),
   }),
 
   execute: async (inputData) => {
-    const { query, repo, language, layer } = inputData;
+    const { query, repo, language, layer, compact } = inputData;
     const t0 = Date.now();
 
     const conditions: Array<{ key: string; match: { value: string } }> = [];
@@ -134,6 +154,8 @@ export const searchCode = createTool({
       const denseVec = await embedText(textToEmbed);
       const tEmbed = Date.now();
 
+      const resultLimit = compact ? 3 : 8;
+
       // Hybrid search: dense + BM25 prefetch with RRF fusion (Qdrant handles ranking)
       const rawResults = await rawQdrant.query(COLLECTION, {
         prefetch: [
@@ -141,7 +163,7 @@ export const searchCode = createTool({
           { query: textToSparse(textToEmbed), using: "bm25", limit: 20, filter },
         ],
         query: { fusion: "rrf" },
-        limit: 8,
+        limit: resultLimit,
         with_payload: true,
       });
       const tSearch = Date.now();
@@ -162,10 +184,19 @@ export const searchCode = createTool({
         };
       }
 
+      if (compact) {
+        const results = points.map(mapPointToCompact);
+        logger.info(
+          { query, embed: tEmbed - t0, search: tSearch - tEmbed, total: Date.now() - t0 },
+          "searchCode timing (ms)",
+        );
+        return { results };
+      }
+
       const headerMap = await fetchHeaders(points);
       const tHeaders = Date.now();
 
-      const results = points.map((p) => mapPointToResult(p, headerMap));
+      const results = points.map((p) => mapPointToFull(p, headerMap));
 
       logger.info(
         {
