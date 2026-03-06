@@ -110,7 +110,7 @@ app.get("/api/health", async (c) => {
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.0.0" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.1.0" }));
 
 // --- Startup + Shutdown ---
 

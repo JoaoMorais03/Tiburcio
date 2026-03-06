@@ -1,6 +1,6 @@
 # Tiburcio — Claude Code Configuration
 
-Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 8 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports OpenRouter (cloud) or Ollama (local, zero API calls).
+Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 9 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
 
 ## Philosophy
 
@@ -25,7 +25,7 @@ docker compose up db redis qdrant -d  # infrastructure only
 pnpm dev                              # backend + frontend dev servers
 
 # Backend (from backend/)
-pnpm test                  # 136 tests, no external deps needed
+pnpm test                  # 137 tests, no external deps needed
 pnpm check                 # biome lint + tsc type check
 pnpm build                 # tsc compile to dist/
 pnpm db:migrate            # run Drizzle migrations
@@ -47,10 +47,10 @@ docker compose ps              # check service health
 
 ## Architecture
 
-- **Backend**: Hono HTTP server + Mastra AI framework + BullMQ jobs
+- **Backend**: Hono HTTP server + Vercel AI SDK v6 + MCP TypeScript SDK + BullMQ jobs
 - **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
-- **LLM**: Provider-agnostic — OpenRouter (`minimax/minimax-m2.5`) or Ollama (`qwen3:8b`) via `MODEL_PROVIDER` env var
-- **Embeddings**: OpenRouter (`qwen/qwen3-embedding-8b`, 4096 dims) or Ollama (`nomic-embed-text`, 768 dims) — auto-detected
+- **LLM**: Provider-agnostic via `lib/model-provider.ts` — Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter) via `MODEL_PROVIDER` env var
+- **Embeddings**: Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible (`text-embedding-*`, configurable dims) — auto-defaults based on provider
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
@@ -66,19 +66,18 @@ docker compose ps              # check service health
 ## Key Patterns
 
 ### Single source of truth for infrastructure
-All shared singletons live in `backend/src/mastra/infra.ts`: `qdrant` (Mastra wrapper), `rawQdrant` (raw Qdrant client for sparse vectors & Query API), `chatModel`, `embeddingModel`, `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
+All shared singletons live in `backend/src/mastra/infra.ts`: `rawQdrant` (Qdrant client for all vector ops), `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
 
 ### Provider-agnostic model layer
-`infra.ts` exports `chatModel` and `embeddingModel` that work with both OpenRouter and Ollama. Set `MODEL_PROVIDER=ollama` or `MODEL_PROVIDER=openrouter` in env. Ollama uses `@ai-sdk/openai-compatible` (connects to Ollama's OpenAI-compatible `/v1` endpoint). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
+`backend/src/lib/model-provider.ts` exports `getChatModel()` and `getEmbeddingModel()`. Set `MODEL_PROVIDER=ollama` (default) or `MODEL_PROVIDER=openai-compatible` in env. Ollama uses `ollama-ai-provider`. OpenAI-compatible uses `@ai-sdk/openai` createOpenAI (works with vLLM, OpenRouter, LM Studio, etc.). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
 
-### Two Qdrant clients
-- `qdrant` — Mastra `QdrantVector` wrapper for simple operations (single-vector collections)
-- `rawQdrant` — `@qdrant/js-client-rest` `QdrantClient` for sparse vectors, hybrid queries (prefetch + RRF), and point retrieval
+### One Qdrant client
+- `rawQdrant` — `@qdrant/js-client-rest` `QdrantClient` for all operations: simple search, sparse vectors, hybrid queries (prefetch + RRF), and point retrieval. All 6 collections use `rawQdrant` directly.
 
 ### Embedding layer separation
 `backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
 
-### RAG pipeline (v2.0.0)
+### RAG pipeline (v2.1.0)
 1. **AST chunking** — tree-sitter parses Java/TypeScript, regex splits Vue SFC sections then AST-parses `<script>`, SQL stays regex-based
 2. **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic technique, 49% fewer retrieval failures)
 3. **Header chunk linkage** — each chunk stores `headerChunkId` pointing to its file's imports/class declaration chunk
@@ -95,7 +94,7 @@ import { rawQdrant } from "../infra.js";
 ```
 
 ### BullMQ job execution
-Simple indexing jobs (standards, codebase, architecture) call indexer functions directly in `backend/src/jobs/queue.ts`. Only `nightly-review` uses a Mastra workflow (multi-step: reindex → review → test suggestions).
+All jobs call indexer functions directly in `backend/src/jobs/queue.ts`. The nightly review job runs `nightly-review.ts` which orchestrates: reindex → code review (AI SDK `generateText` with tools) → test suggestions.
 
 ### Drizzle migrations
 Schema lives in `backend/src/db/schema.ts`. Generate migrations with `pnpm db:generate`. Migration files go in `backend/drizzle/`. Never write raw DDL.
@@ -112,6 +111,7 @@ backend/src/
   config/env.ts          # Zod-validated env vars (envSchema exported for tests)
   config/logger.ts       # Pino logger
   config/redis.ts        # ioredis client
+  lib/model-provider.ts  # getChatModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
   db/schema.ts           # Drizzle schema (users, conversations, messages)
   db/connection.ts       # postgres driver + drizzle instance
   db/migrate.ts          # Drizzle migrator
@@ -119,25 +119,23 @@ backend/src/
   indexer/bm25.ts        # BM25 tokenizer for sparse vectors (FNV-1a hashing)
   indexer/chunker.ts     # language dispatcher → AST or regex chunking
   indexer/contextualize.ts # contextual retrieval — LLM context per chunk before embedding
-  indexer/embed.ts       # embedText, embedTexts, toUUID (uses embeddingModel from infra.ts)
+  indexer/embed.ts       # embedText, embedTexts, toUUID (uses getEmbeddingModel())
   indexer/redact.ts      # redactSecrets — strips secrets before sending to APIs
+  indexer/text-splitter.ts # splitText() — replaces @mastra/rag MDocument chunking
   indexer/fs.ts          # shared findMarkdownFiles utility
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
-  mastra/infra.ts        # qdrant + rawQdrant + chatModel + embeddingModel + ensureCollection
-  mastra/agents/         # chat-agent.ts, code-review-agent.ts
+  mastra/infra.ts        # rawQdrant + ensureCollection (no chatModel/embeddingModel — use lib/model-provider.ts)
   mastra/tools/          # 9 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, etc.)
-  mastra/workflows/      # nightly-review.ts (only workflow)
-  mastra/memory.ts       # semantic recall + working memory config
-  mastra/index.ts        # Mastra instance (agents + workflow + observability)
+  mastra/workflows/      # nightly-review.ts (multi-step orchestration via AI SDK generateText)
   jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
   middleware/rate-limiter.ts  # global, auth, chat rate limiters
   routes/auth.ts         # POST /api/auth/login, /register, /refresh, /logout (httpOnly cookies)
-  routes/chat.ts         # POST /api/chat/stream (SSE), GET conversations/messages
+  routes/chat.ts         # POST /api/chat/stream (SSE via AI SDK streamText), GET conversations/messages
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
   routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
-  mcp.ts                 # MCP stdio server (9 tools exposed)
+  mcp.ts                 # MCP stdio server (9 tools via @modelcontextprotocol/sdk)
 ```
 
 ## Gotchas
@@ -150,36 +148,40 @@ backend/src/
 - **Qdrant healthcheck**: Uses `bash -c ':> /dev/tcp/localhost/6333'` because the qdrant image has no curl/wget.
 - **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_REPOS` later, restart the backend and `code-chunks` will auto-index.
 - **`.tibignore`**: Place a `.tibignore` file in each repo root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
-- **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending text to OpenRouter or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
-- **Embedding model migration**: Switching `MODEL_PROVIDER` or `EMBEDDING_MODEL` auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openrouter:qwen/qwen3-embedding-8b`). Re-indexing is triggered automatically.
-- **OPENROUTER_API_KEY conditional**: Only required when `MODEL_PROVIDER=openrouter`. Zod `.refine()` validates this at startup. When using Ollama, no external API keys are needed.
-- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama) or 4096 (OpenRouter) based on `MODEL_PROVIDER`. Can be overridden manually. All `ensureCollection()` calls use this value.
+- **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending to inference APIs or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
+- **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:text-embedding-3-small`). Re-indexing is triggered automatically.
+- **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. When using Ollama, no external API keys are needed.
+- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama) or 4096 (openai-compatible) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
 - **BullMQ lock duration**: Worker uses `lockDuration: 300_000` (5 min) and `lockRenewTime: 60_000` (1 min). Default 30s lock causes stalled-job detection during long indexing runs.
-- **concurrency: 1** on BullMQ worker: indexing jobs run sequentially to avoid overwhelming OpenRouter rate limits.
+- **concurrency: 1** on BullMQ worker: indexing jobs run sequentially to avoid overwhelming inference API rate limits.
 - **Contextualization skip logic**: Header chunks (imports/class declarations) and single-chunk small files (< 3000 chars) skip LLM contextualization — they are self-documenting, saving ~40% of LLM calls.
 - **Contextualization timeout**: `contextualizeChunk()` uses `AbortSignal.timeout(30_000)`. Timed-out chunks fall back to empty context. The dense + sparse vectors still work.
-- **p-limit concurrency**: `index-codebase.ts` uses `p-limit(3)` for file-level parallelism. ~3 concurrent LLM calls at any time, safe for OpenRouter rate limits.
+- **p-limit concurrency**: `index-codebase.ts` uses `p-limit(3)` for file-level parallelism. ~3 concurrent LLM calls at any time, safe for inference API rate limits.
 - **pino-pretty**: Only available in dev. Production uses JSON logging. If `NODE_ENV` is not set to `production` in Docker, pino-pretty import crashes the container.
 - **tree-sitter native bindings**: Requires `python3`, `make`, `g++` in the Docker build stage. Uses `createRequire()` for CJS interop in ESM project.
-- **code-chunks collection is sparse-enabled**: Uses named vectors (`dense` + `bm25`). The `rawQdrant` client must be used for upsert/query on this collection, not the Mastra wrapper.
+- **code-chunks collection is sparse-enabled**: Uses named vectors (`dense` + `bm25`). Always use `rawQdrant` for upsert/query on this collection.
 - **Full reindex required after v1.1 upgrade**: The code-chunks collection schema changed (named vectors + new metadata fields). The indexer automatically drops and recreates it.
 - **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
 - **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
-- **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses Mastra's `startHonoSSE()` for native Hono integration.
-- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add ... -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both expose the same 8 tools.
+- **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk`.
+- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both expose the same 9 tools.
+- **AI SDK v6 tools**: Tools use `inputSchema:` (not `parameters:`). Import `z` from `"zod"` (v3), not `"zod/v4"` — AI SDK v6's `FlexibleSchema` requires Zod v3 types. Each tool file exports both `executeFoo()` (standalone async fn) and `fooTool` (AI SDK tool object).
+- **`stopWhen: stepCountIs(N)`**: AI SDK v6 replaced `maxSteps: N` with `stopWhen: stepCountIs(N)` imported from `"ai"`.
 
 ## Testing
 
 Tests use Vitest with mocks — no external services needed. Key mock patterns:
-- `vi.mock("../mastra/infra.js")` for qdrant, rawQdrant, chatModel, embeddingModel
+- `vi.mock("../mastra/infra.js")` for `rawQdrant` (search, query, retrieve, upsert, delete)
 - `vi.mock("../indexer/embed.js")` for embedText
 - `vi.mock("../indexer/bm25.js")` for textToSparse (stub in tool tests)
 - `vi.mock("../indexer/contextualize.js")` for contextualizeChunks (stub in index-codebase tests)
-- `vi.mock("ai")` for generateText (contextualize tests)
+- `vi.mock("../lib/model-provider.js")` for getChatModel (returns `{}`)
+- `vi.mock("ai", async (importOriginal) => ({ ...actual, streamText: vi.fn() }))` — chat tests
+- `vi.mock("ai")` for generateText (contextualize and nightly-review tests)
 - `vi.mock("p-limit")` passthrough mock (index-codebase tests — no real concurrency in tests)
-- `vi.mock("../mastra/index.js")` for the Mastra agent
+- Tool tests use `qdrantHit(score, payload)` helper to match `rawQdrant.search()` return format
 - Chat tests parse SSE events with a `parseSSE()` helper
 - Auth tests mock Redis for refresh token jti storage
 - Auth tests use real bcrypt (slower but accurate)
@@ -188,4 +190,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v2.0.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v2.1.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
