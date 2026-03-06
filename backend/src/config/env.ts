@@ -48,6 +48,14 @@ const baseSchema = z.object({
   // Required when exposing MCP over HTTP for team deployment.
   TEAM_API_KEY: z.string().optional(),
 
+  // Retrieval confidence thresholds — filter low-relevance results before returning to Claude
+  RETRIEVAL_CONFIDENCE_THRESHOLD: z.coerce.number().default(0.45),
+  // searchCode uses Qdrant RRF fusion scores (not cosine similarity) — much lower scale
+  RETRIEVAL_CODE_SCORE_THRESHOLD: z.coerce.number().default(0.02),
+  // Neo4j graph (optional — omit NEO4J_URI to disable graph features entirely)
+  NEO4J_URI: z.string().optional(),
+  NEO4J_PASSWORD: z.string().optional(),
+
   CORS_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
 
   PORT: z.coerce.number().default(3000),

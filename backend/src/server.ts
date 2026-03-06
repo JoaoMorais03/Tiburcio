@@ -18,6 +18,7 @@ import { logger } from "./config/logger.js";
 import { redis } from "./config/redis.js";
 import { connection, db } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
+import { closeGraphDriver, ensureGraphSchema } from "./graph/client.js";
 import { indexQueue, scheduleNightlyJobs, startIndexWorker } from "./jobs/queue.js";
 import { deleteCollection, listCollections, rawQdrant } from "./mastra/infra.js";
 import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limiter.js";
@@ -119,6 +120,7 @@ let indexWorker: Awaited<ReturnType<typeof startIndexWorker>> | undefined;
 
 async function start(): Promise<void> {
   await runMigrations();
+  await ensureGraphSchema(); // no-op when NEO4J_URI is not set
 
   indexWorker = startIndexWorker();
   await scheduleNightlyJobs();
@@ -197,6 +199,7 @@ async function shutdown(signal: string): Promise<void> {
   await indexWorker?.close().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});
+  await closeGraphDriver().catch(() => {});
 
   logger.info("All resources closed");
   process.exit(0);

@@ -4,6 +4,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { embedText } from "../../indexer/embed.js";
@@ -127,6 +128,19 @@ export async function executeSearchCode(
           "No matching code found. Suggestions: " +
           (language || layer ? "try removing the language/layer filter. " : "") +
           "Try searchStandards for conventions or getPattern for code templates.",
+      };
+    }
+
+    const codeThreshold = env.RETRIEVAL_CODE_SCORE_THRESHOLD as number;
+    const topCodeScore = points[0]?.score ?? 0;
+    if (topCodeScore < codeThreshold) {
+      logger.info(
+        { topCodeScore, codeThreshold },
+        "searchCode: results below confidence threshold",
+      );
+      return {
+        results: [],
+        message: `No high-confidence code found (best score: ${topCodeScore.toFixed(4)}, threshold: ${codeThreshold}). Try rephrasing the query or removing language/layer filters.`,
       };
     }
 

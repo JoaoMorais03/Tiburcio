@@ -13,7 +13,7 @@ import { ensureCollection, rawQdrant } from "../mastra/infra.js";
 import { textToSparse } from "./bm25.js";
 import { chunkFile } from "./chunker.js";
 import { contextualizeChunks } from "./contextualize.js";
-import { embedTexts, toUUID } from "./embed.js";
+import { contentHash, embedTexts, enrichChunkForEmbedding, toUUID } from "./embed.js";
 import { getHeadSha } from "./git-diff.js";
 import { redactSecrets } from "./redact.js";
 
@@ -156,14 +156,14 @@ async function processFile(
   repoName: string,
   fileIndex: number,
   totalFiles: number,
-): Promise<{ chunks: number; contextSkipped: number }> {
+): Promise<{ chunks: number; contextSkipped: number; chunkIds: string[] }> {
   const content = await readFile(filePath, "utf-8");
   const relPath = relative(codebasePath, filePath);
 
   logger.info({ file: relPath, progress: `${fileIndex + 1}/${totalFiles}` }, "Indexing file");
 
   const chunks = chunkFile(content, relPath);
-  if (chunks.length === 0) return { chunks: 0, contextSkipped: 0 };
+  if (chunks.length === 0) return { chunks: 0, contextSkipped: 0, chunkIds: [] };
 
   // Link each chunk to its file's header chunk
   const headerChunk = chunks.find((c) => c.chunkType === "header");
@@ -194,13 +194,58 @@ async function processFile(
   }
 
   // Embed all chunks for this file in one batch call
-  const textsToEmbed = chunks.map((chunk, idx) => {
-    const prefix = `${chunk.language} ${chunk.layer} ${chunk.filePath}`;
-    return contexts[idx]
-      ? `${contexts[idx]}\n\n${prefix}\n\n${chunk.content}`
-      : `${prefix}\n\n${chunk.content}`;
-  });
-  const embeddings = await withRetry(() => embedTexts(textsToEmbed), "Embedding", relPath);
+  const enrichedTexts = chunks.map((chunk, idx) =>
+    enrichChunkForEmbedding(chunk, contexts[idx] || undefined),
+  );
+  const hashes = enrichedTexts.map(contentHash);
+
+  // Batch-retrieve existing payloads + dense vectors to skip re-embedding unchanged chunks
+  const chunkIds = chunks.map((c) => chunkId(repoName, c.filePath, c.startLine));
+  let existing: Array<{
+    id: string | number;
+    payload?: Record<string, unknown> | null;
+    vectors?: Record<string, unknown> | null;
+  }> = [];
+  try {
+    existing = await rawQdrant.retrieve(COLLECTION, {
+      ids: chunkIds,
+      with_payload: ["contentHash"],
+      with_vector: ["dense"],
+    });
+  } catch {
+    // Hash cache unavailable — embed all chunks
+  }
+  const existingMap = new Map(existing.map((p) => [String(p.id), p]));
+
+  const toEmbedIdxs: number[] = [];
+  const embeddings: number[][] = new Array(chunks.length);
+  for (let i = 0; i < chunks.length; i++) {
+    const ex = existingMap.get(chunkIds[i]);
+    const existingDense = (ex?.vectors as Record<string, unknown> | undefined)?.dense as
+      | number[]
+      | undefined;
+    if (ex?.payload?.contentHash === hashes[i] && existingDense) {
+      embeddings[i] = existingDense;
+    } else {
+      toEmbedIdxs.push(i);
+    }
+  }
+
+  if (toEmbedIdxs.length < chunks.length) {
+    logger.debug(
+      { file: relPath, skipped: chunks.length - toEmbedIdxs.length, total: chunks.length },
+      "Hash cache hit — skipping unchanged chunks",
+    );
+  }
+
+  if (toEmbedIdxs.length > 0) {
+    const newEmbeds = await withRetry(
+      () => embedTexts(toEmbedIdxs.map((i) => enrichedTexts[i])),
+      "Embedding",
+      relPath,
+    );
+    for (let j = 0; j < toEmbedIdxs.length; j++) embeddings[toEmbedIdxs[j]] = newEmbeds[j];
+  }
 
   // Build points with dense + sparse vectors and upsert immediately
   const points = chunks.map((chunk, idx) => {
@@ -235,12 +280,14 @@ async function processFile(
         chunkIndex: chunk.chunkIndex,
         totalChunks: chunk.totalChunks,
         headerChunkId: chunk.headerChunkId,
+        contentHash: hashes[idx],
+        indexedAt: new Date().toISOString(),
       },
     };
   });
 
   await withRetry(() => rawQdrant.upsert(COLLECTION, { wait: true, points }), "Upsert", relPath);
-  return { chunks: chunks.length, contextSkipped };
+  return { chunks: chunks.length, contextSkipped, chunkIds };
 }
 
 export async function indexCodebase(
@@ -273,18 +320,6 @@ export async function indexCodebase(
     // Index already exists — fine
   }
 
-  // Purge stale vectors for this repo before re-indexing.
-  // Delete-by-filter (not drop) so other repos are untouched.
-  try {
-    await rawQdrant.delete(COLLECTION, {
-      wait: true,
-      filter: { must: [{ key: "repo", match: { value: repoName } }] },
-    });
-    logger.info({ repo: repoName }, "Purged stale vectors for repo");
-  } catch {
-    // Collection was just created — nothing to delete
-  }
-
   logger.info(
     { repo: repoName, files: sourceFiles.length, concurrency: FILE_CONCURRENCY },
     "Starting codebase indexing",
@@ -306,17 +341,43 @@ export async function indexCodebase(
             { path: filePath, err },
             "Skipped file during indexing after retries exhausted",
           );
-          return { chunks: 0, contextSkipped: 0 };
+          return { chunks: 0, contextSkipped: 0, chunkIds: [] };
         }
       }),
     ),
   );
 
+  const allCurrentIds = new Set<string>();
   for (const result of results) {
     if (result.status === "fulfilled") {
       totalChunks += result.value.chunks;
       totalContextSkipped += result.value.contextSkipped;
+      for (const id of result.value.chunkIds) allCurrentIds.add(id);
     }
+  }
+
+  // Delete orphan vectors: chunks from a previous index that no longer exist
+  try {
+    let nextOffset: string | number | null = null;
+    do {
+      const page = await rawQdrant.scroll(COLLECTION, {
+        filter: { must: [{ key: "repo", match: { value: repoName } }] },
+        limit: 500,
+        offset: nextOffset ?? undefined,
+        with_payload: false,
+        with_vector: false,
+      });
+      const pts = page.points as Array<{ id: string | number }>;
+      const orphanIds = pts.map((p) => String(p.id)).filter((id) => !allCurrentIds.has(id));
+      if (orphanIds.length > 0) {
+        await rawQdrant.delete(COLLECTION, { wait: true, points: orphanIds });
+        logger.info({ count: orphanIds.length, repo: repoName }, "Deleted orphan vectors");
+      }
+      nextOffset =
+        (page as unknown as { next_page_offset?: string | number | null }).next_page_offset ?? null;
+    } while (nextOffset != null);
+  } catch {
+    // Not critical — orphans will be cleaned on next index
   }
 
   // Store the current HEAD SHA per repo so the nightly incremental reindex

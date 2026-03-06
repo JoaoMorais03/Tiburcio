@@ -14,6 +14,8 @@ vi.mock("../mastra/infra.js", () => ({
     upsert: vi.fn(),
     delete: vi.fn(),
     createPayloadIndex: vi.fn(),
+    retrieve: vi.fn(() => Promise.resolve([])), // hash cache: no existing vectors
+    scroll: vi.fn(() => Promise.resolve({ points: [], next_page_offset: null })), // orphan cleanup
   },
   ensureCollection: vi.fn(),
 }));
@@ -21,6 +23,8 @@ vi.mock("../mastra/infra.js", () => ({
 vi.mock("../indexer/embed.js", () => ({
   embedTexts: vi.fn(() => [[0.1, 0.2]]),
   toUUID: vi.fn((s: string) => s),
+  enrichChunkForEmbedding: vi.fn((chunk: { content: string }) => chunk.content),
+  contentHash: vi.fn((s: string) => `hash:${s}`),
 }));
 
 vi.mock("../indexer/contextualize.js", () => ({
@@ -91,6 +95,13 @@ describe("indexCodebase", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
+    // Re-establish retrieve + scroll mocks (clearAllMocks can wipe vi.fn(impl) implementations)
+    vi.mocked(rawQdrant.retrieve).mockResolvedValue([]);
+    vi.mocked(rawQdrant.scroll).mockResolvedValue({
+      points: [],
+      next_page_offset: null,
+    } as never);
+
     // Default: codebasePath exists, no .tibignore, one source file
     vi.mocked(stat).mockResolvedValue({} as never);
     vi.mocked(readdir).mockImplementation(async (dir) => {
@@ -124,20 +135,25 @@ describe("indexCodebase", () => {
     expect(callOrder.indexOf("ensureCollection")).toBeLessThan(callOrder.indexOf("upsert"));
   });
 
-  it("purges stale vectors before processing", async () => {
-    const callOrder: string[] = [];
-    vi.mocked(rawQdrant.delete).mockImplementation(async () => {
-      callOrder.push("delete");
-      return {} as never;
-    });
-    vi.mocked(rawQdrant.upsert).mockImplementation(async () => {
-      callOrder.push("upsert");
-      return {} as never;
-    });
+  it("scrolls and deletes orphan vectors after processing", async () => {
+    // Simulate Qdrant returning a stale ID not in the current chunk set
+    vi.mocked(rawQdrant.scroll).mockResolvedValueOnce({
+      points: [{ id: "stale-orphan-id" }],
+      next_page_offset: null,
+    } as never);
 
     await indexCodebase("/codebase", "myrepo");
 
-    expect(callOrder.indexOf("delete")).toBeLessThan(callOrder.indexOf("upsert"));
+    // Orphan cleanup: scroll was called to find old IDs
+    expect(rawQdrant.scroll).toHaveBeenCalledWith(
+      "code-chunks",
+      expect.objectContaining({ filter: expect.any(Object) }),
+    );
+    // Stale ID not in current set → deleted
+    expect(rawQdrant.delete).toHaveBeenCalledWith(
+      "code-chunks",
+      expect.objectContaining({ points: ["stale-orphan-id"] }),
+    );
   });
 
   it("processes files and upserts per-file", async () => {

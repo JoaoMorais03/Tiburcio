@@ -3,6 +3,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
@@ -40,6 +41,16 @@ export async function executeGetTestSuggestions(
           "No test suggestions found. The nightly pipeline may not have run yet. " +
           (language ? "Try removing the language filter. " : "") +
           "Try searchReviews for recent changes, or searchCode for existing test files.",
+      };
+    }
+
+    const threshold = env.RETRIEVAL_CONFIDENCE_THRESHOLD as number;
+    const topScore = results[0]?.score ?? 0;
+    if (topScore < threshold) {
+      logger.info({ topScore, threshold }, "Results below confidence threshold");
+      return {
+        results: [],
+        message: `No high-confidence results found (best score: ${topScore.toFixed(3)}, threshold: ${threshold}). Try rephrasing the query or using a different tool.`,
       };
     }
 

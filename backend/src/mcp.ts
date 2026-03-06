@@ -7,6 +7,7 @@ import { z } from "zod/v4";
 
 import { executeGetArchitecture } from "./mastra/tools/get-architecture.js";
 import { executeGetChangeSummary } from "./mastra/tools/get-change-summary.js";
+import { executeGetImpactAnalysis } from "./mastra/tools/get-impact-analysis.js";
 import { executeGetNightlySummary } from "./mastra/tools/get-nightly-summary.js";
 import { executeGetPattern } from "./mastra/tools/get-pattern.js";
 import { executeGetTestSuggestions } from "./mastra/tools/get-test-suggestions.js";
@@ -221,6 +222,28 @@ server.registerTool(
   },
   async ({ since, area }) => {
     const result = await executeGetChangeSummary(since, area);
+    return { content: [{ type: "text", text: JSON.stringify(result) }] };
+  },
+);
+
+server.registerTool(
+  "getImpactAnalysis",
+  {
+    description:
+      "Trace dependency impact for a file, function, class, or table using the graph layer. " +
+      "Returns all code that directly or transitively depends on the target. " +
+      "Use before refactoring to understand blast radius. " +
+      "Returns available: false if graph features are not configured (NEO4J_URI not set).",
+    inputSchema: {
+      target: z.string().describe("File path, function name, class name, or table name"),
+      targetType: z.enum(["file", "function", "class", "table"]),
+      depth: z.number().min(1).max(3).default(2).describe("Traversal depth (1-3)"),
+      repo: z.string().optional().describe("Filter by repo name. Omit to search all repos."),
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  async ({ target, targetType, depth, repo }) => {
+    const result = await executeGetImpactAnalysis(target, targetType, depth ?? 2, repo);
     return { content: [{ type: "text", text: JSON.stringify(result) }] };
   },
 );

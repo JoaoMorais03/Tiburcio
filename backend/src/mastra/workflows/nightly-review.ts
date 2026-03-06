@@ -10,10 +10,12 @@ import { generateText, stepCountIs } from "ai";
 import { getRepoConfigs } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { redis } from "../../config/redis.js";
+import { buildGraph } from "../../graph/builder.js";
+import { isGraphAvailable } from "../../graph/client.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { chunkFile, detectLanguage } from "../../indexer/chunker.js";
 import { contextualizeChunks } from "../../indexer/contextualize.js";
-import { embedTexts, toUUID } from "../../indexer/embed.js";
+import { contentHash, embedTexts, enrichChunkForEmbedding, toUUID } from "../../indexer/embed.js";
 import {
   getChangedFiles,
   getDeletedFiles,
@@ -181,12 +183,9 @@ async function incrementalReindex(): Promise<{ filesIndexed: number; chunksIndex
         }
 
         // Prepend context to embedding text
-        const textsToEmbed = chunks.map((c, idx) => {
-          const prefix = `${c.language} ${c.layer} ${c.filePath}`;
-          return contexts[idx]
-            ? `${contexts[idx]}\n\n${prefix}\n\n${c.content}`
-            : `${prefix}\n\n${c.content}`;
-        });
+        const textsToEmbed = chunks.map((c, idx) =>
+          enrichChunkForEmbedding(c, contexts[idx] || undefined),
+        );
         const embeddings = await embedTexts(textsToEmbed);
 
         // Upsert with both dense + sparse vectors
@@ -216,6 +215,8 @@ async function incrementalReindex(): Promise<{ filesIndexed: number; chunksIndex
               chunkIndex: c.chunkIndex,
               totalChunks: c.totalChunks,
               headerChunkId: c.headerChunkId,
+              contentHash: contentHash(enrichChunkForEmbedding(c, contexts[idx] || undefined)),
+              indexedAt: new Date().toISOString(),
             },
           };
         });
@@ -452,11 +453,28 @@ Respond with ONLY a test scaffold — the actual test code a developer would use
   return { suggestions: allSuggestions.length };
 }
 
+// --- Step 4: Graph rebuild (optional) ---
+
+async function buildGraphStep(): Promise<void> {
+  if (!isGraphAvailable()) {
+    logger.info("Neo4j not configured, skipping graph rebuild");
+    return;
+  }
+  const repos = getRepoConfigs();
+  try {
+    const { nodes, edges } = await buildGraph(repos);
+    logger.info({ nodes, edges }, "Graph rebuild complete");
+  } catch (err) {
+    logger.error({ err }, "Graph rebuild failed (non-fatal — nightly pipeline continues)");
+  }
+}
+
 // --- Nightly review pipeline ---
 
 export async function runNightlyReview(): Promise<{ suggestions: number }> {
   await incrementalReindex();
   const { commitsJson } = await codeReview();
   const { suggestions } = await generateTestSuggestions(commitsJson);
+  await buildGraphStep();
   return { suggestions };
 }
