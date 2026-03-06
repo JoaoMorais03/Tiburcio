@@ -1,46 +1,47 @@
 // tools/get-nightly-summary.ts — Consolidated morning briefing from nightly intelligence.
 // Returns a concise summary of recent merges, convention warnings, and untested code.
 
-import { createTool } from "@mastra/core/tools";
-import { z } from "zod/v4";
+import { tool } from "ai";
+import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { qdrant } from "../infra.js";
+import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
 
-interface ReviewResult {
+interface SearchResult {
   score?: number;
-  metadata?: Record<string, unknown>;
+  payload?: Record<string, unknown> | null;
 }
 
-function countBySeverity(results: ReviewResult[]) {
+function countBySeverity(results: SearchResult[]) {
   const counts = { info: 0, warning: 0, critical: 0 };
   for (const r of results) {
-    const sev = (r.metadata?.severity as string) ?? "info";
+    const sev = (r.payload?.severity as string) ?? "info";
     if (sev in counts) counts[sev as keyof typeof counts]++;
   }
   return counts;
 }
 
-function filterRecent(results: ReviewResult[], cutoffStr: string) {
+function filterRecent(results: SearchResult[], cutoffStr: string) {
   return results.filter((r) => {
-    const date = (r.metadata?.date as string) ?? "";
+    const date = (r.payload?.date as string) ?? "";
     return date >= cutoffStr;
   });
 }
 
-function extractIssues(recentReviews: ReviewResult[]) {
+function extractIssues(recentReviews: SearchResult[]) {
   const warningFiles = new Set<string>();
   const criticalItems: Array<{ filePath: string; summary: string; category: string }> = [];
   for (const r of recentReviews) {
-    const sev = (r.metadata?.severity as string) ?? "info";
-    const filePath = (r.metadata?.filePath as string) ?? "unknown";
+    const sev = (r.payload?.severity as string) ?? "info";
+    const filePath = (r.payload?.filePath as string) ?? "unknown";
     if (sev === "warning" || sev === "critical") warningFiles.add(filePath);
     if (sev === "critical") {
       criticalItems.push({
         filePath,
-        summary: truncate((r.metadata?.text as string) ?? "", 150),
-        category: (r.metadata?.category as string) ?? "unknown",
+        summary: truncate((r.payload?.text as string) ?? "", 150),
+        category: (r.payload?.category as string) ?? "unknown",
       });
     }
   }
@@ -64,11 +65,65 @@ function buildBriefing(
   return lines.join("\n");
 }
 
-export const getNightlySummary = createTool({
-  id: "getNightlySummary",
-  mcp: {
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
+export async function executeGetNightlySummary(daysBack = 1) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysBack);
+  const cutoffStr = cutoff.toISOString().split("T")[0];
+
+  try {
+    const dims = env.EMBEDDING_DIMENSIONS as number;
+    const zeroVec = new Array(dims).fill(0);
+    const [reviews, testSuggestions] = await Promise.all([
+      rawQdrant
+        .search("reviews", { vector: zeroVec, limit: 50, with_payload: true })
+        .catch(() => []),
+      rawQdrant
+        .search("test-suggestions", { vector: zeroVec, limit: 20, with_payload: true })
+        .catch(() => []),
+    ]);
+
+    const recentReviews = filterRecent(reviews, cutoffStr);
+    const recentTests = filterRecent(testSuggestions, cutoffStr);
+
+    if (recentReviews.length === 0 && recentTests.length === 0) {
+      return {
+        summary:
+          `No nightly intelligence data found for the last ${daysBack} day(s). ` +
+          "The nightly pipeline may not have run yet, or there were no merges to review.",
+        testGaps: [],
+      };
+    }
+
+    const severity = countBySeverity(recentReviews);
+    const { warningFiles, criticalItems } = extractIssues(recentReviews);
+    const testGaps = recentTests.map((r) => ({
+      targetFile: (r.payload?.targetFile as string) ?? "unknown",
+      testType: (r.payload?.testType as string) ?? "unit",
+    }));
+
+    return {
+      summary: buildBriefing(
+        daysBack,
+        recentReviews.length,
+        severity,
+        warningFiles.size,
+        testGaps.length,
+      ),
+      severityCounts: severity,
+      criticalItems: criticalItems.slice(0, 5),
+      warningFiles: [...warningFiles].slice(0, 10),
+      testGaps: testGaps.slice(0, 5),
+    };
+  } catch (err) {
+    logger.error({ err }, "getNightlySummary failed");
+    return {
+      summary: "Unable to generate nightly summary. The nightly pipeline may not have run yet.",
+      testGaps: [],
+    };
+  }
+}
+
+export const getNightlySummaryTool = tool({
   description:
     "Get a consolidated morning briefing from the nightly intelligence pipeline. " +
     "Returns: merge count, convention warnings, untested files, and actionable items. " +
@@ -80,60 +135,5 @@ export const getNightlySummary = createTool({
       .default(1)
       .describe("How many days back to summarize (default: 1 for yesterday)"),
   }),
-
-  execute: async (inputData) => {
-    const { daysBack } = inputData;
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - daysBack);
-    const cutoffStr = cutoff.toISOString().split("T")[0];
-
-    try {
-      const zeroVec = new Array(768).fill(0);
-      const [reviews, testSuggestions] = await Promise.all([
-        qdrant.query({ indexName: "reviews", queryVector: zeroVec, topK: 50 }).catch(() => []),
-        qdrant
-          .query({ indexName: "test-suggestions", queryVector: zeroVec, topK: 20 })
-          .catch(() => []),
-      ]);
-
-      const recentReviews = filterRecent(reviews, cutoffStr);
-      const recentTests = filterRecent(testSuggestions, cutoffStr);
-
-      if (recentReviews.length === 0 && recentTests.length === 0) {
-        return {
-          summary:
-            `No nightly intelligence data found for the last ${daysBack} day(s). ` +
-            "The nightly pipeline may not have run yet, or there were no merges to review.",
-          testGaps: [],
-        };
-      }
-
-      const severity = countBySeverity(recentReviews);
-      const { warningFiles, criticalItems } = extractIssues(recentReviews);
-      const testGaps = recentTests.map((r) => ({
-        targetFile: (r.metadata?.targetFile as string) ?? "unknown",
-        testType: (r.metadata?.testType as string) ?? "unit",
-      }));
-
-      return {
-        summary: buildBriefing(
-          daysBack,
-          recentReviews.length,
-          severity,
-          warningFiles.size,
-          testGaps.length,
-        ),
-        severityCounts: severity,
-        criticalItems: criticalItems.slice(0, 5),
-        warningFiles: [...warningFiles].slice(0, 10),
-        testGaps: testGaps.slice(0, 5),
-      };
-    } catch (err) {
-      logger.error({ err }, "getNightlySummary failed");
-      return {
-        summary: "Unable to generate nightly summary. The nightly pipeline may not have run yet.",
-        testGaps: [],
-      };
-    }
-  },
+  execute: ({ daysBack }) => executeGetNightlySummary(daysBack),
 });

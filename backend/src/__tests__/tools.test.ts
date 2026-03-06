@@ -7,8 +7,7 @@ vi.mock("../indexer/embed.js", () => ({
 }));
 
 vi.mock("../mastra/infra.js", () => ({
-  qdrant: { query: vi.fn() },
-  rawQdrant: { query: vi.fn(), retrieve: vi.fn() },
+  rawQdrant: { search: vi.fn(), query: vi.fn(), retrieve: vi.fn() },
   chatModel: {},
   embeddingModel: {},
 }));
@@ -21,6 +20,10 @@ vi.mock("../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+vi.mock("../config/env.js", () => ({
+  env: { EMBEDDING_DIMENSIONS: 3 },
+}));
+
 vi.mock("node:fs/promises", () => ({
   readdir: vi.fn(),
   readFile: vi.fn(),
@@ -28,19 +31,27 @@ vi.mock("node:fs/promises", () => ({
 
 import { readdir, readFile } from "node:fs/promises";
 import { embedText } from "../indexer/embed.js";
-import { qdrant, rawQdrant } from "../mastra/infra.js";
+import { rawQdrant } from "../mastra/infra.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- test helper needs to call .execute with loose types
+/** Call the execute function from a tool module's exported tool object. */
 async function executeTool(
   toolModule: string,
   input: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const mod = await import(toolModule);
-  const tool = Object.values(mod)[0] as {
-    execute: (input: never, ctx: never) => Promise<unknown>;
-  };
-  const result = await tool.execute(input as never, {} as never);
+  // The tool object from AI SDK has { description, parameters, execute }
+  const toolObj = Object.values(mod).find(
+    (v): v is { execute: (input: never, ctx: never) => Promise<unknown> } =>
+      typeof v === "object" && v !== null && "execute" in v && "description" in v,
+  );
+  if (!toolObj) throw new Error(`No tool object found in ${toolModule}`);
+  const result = await toolObj.execute(input as never, {} as never);
   return result as Record<string, unknown>;
+}
+
+/** Qdrant ScoredPoint format used by rawQdrant.search() */
+function qdrantHit(score: number, payload: Record<string, unknown>) {
+  return { id: "abc-123", version: 0, score, payload };
 }
 
 describe("truncate", () => {
@@ -76,16 +87,13 @@ describe("RAG tools", () => {
 
   describe("searchStandards", () => {
     it("embeds the query and returns mapped results", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.92,
-          metadata: {
-            title: "Error Handling",
-            category: "backend",
-            text: "Use try/catch...",
-            tags: ["error"],
-          },
-        },
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.92, {
+          title: "Error Handling",
+          category: "backend",
+          text: "Use try/catch...",
+          tags: ["error"],
+        }),
       ] as never);
 
       const result = await executeTool("../mastra/tools/search-standards.js", {
@@ -93,19 +101,15 @@ describe("RAG tools", () => {
         compact: false,
       });
 
-      // Verify embedText was actually called with the query
       expect(embedText).toHaveBeenCalledWith("error handling");
-
-      // Verify qdrant.query was called with the embedding output and correct collection
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "standards",
         expect.objectContaining({
-          indexName: "standards",
-          queryVector: [0.1, 0.2, 0.3],
-          topK: 5,
+          vector: [0.1, 0.2, 0.3],
+          limit: 5,
         }),
       );
 
-      // Verify field mapping from metadata
       const results = result.results as Record<string, unknown>[];
       expect(results[0]).toEqual({
         title: "Error Handling",
@@ -117,13 +121,14 @@ describe("RAG tools", () => {
     });
 
     it("passes category filter to Qdrant when provided", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/search-standards.js", {
         query: "vue patterns",
         category: "frontend",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "standards",
         expect.objectContaining({
           filter: { must: [{ key: "category", match: { value: "frontend" } }] },
         }),
@@ -131,16 +136,19 @@ describe("RAG tools", () => {
     });
 
     it("sends NO filter when category is omitted", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/search-standards.js", {
         query: "anything",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ filter: undefined }));
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "standards",
+        expect.objectContaining({ filter: undefined }),
+      );
     });
 
-    it("handles missing metadata fields with fallback defaults", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([{ score: 0.5, metadata: {} }] as never);
+    it("handles missing payload fields with fallback defaults", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([qdrantHit(0.5, {})] as never);
 
       const result = await executeTool("../mastra/tools/search-standards.js", {
         query: "anything",
@@ -157,7 +165,7 @@ describe("RAG tools", () => {
     });
 
     it("returns message when no results found", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       const result = await executeTool("../mastra/tools/search-standards.js", {
         query: "nonexistent",
       });
@@ -168,7 +176,7 @@ describe("RAG tools", () => {
   });
 
   describe("searchCode", () => {
-    it("uses query expansion + hybrid search and returns enriched results", async () => {
+    it("uses hybrid search and returns enriched results", async () => {
       vi.mocked(rawQdrant.query).mockResolvedValue({
         points: [
           {
@@ -192,7 +200,6 @@ describe("RAG tools", () => {
         ],
       } as never);
 
-      // Mock batched header chunk retrieval
       vi.mocked(rawQdrant.retrieve).mockResolvedValue([
         {
           id: "hdr-uuid",
@@ -207,10 +214,7 @@ describe("RAG tools", () => {
         compact: false,
       });
 
-      // Verify embedding was called with language+layer+query
       expect(embedText).toHaveBeenCalledWith("java service create user");
-
-      // Verify rawQdrant.query was called (hybrid search with prefetch + RRF)
       expect(rawQdrant.query).toHaveBeenCalledWith(
         "code-chunks",
         expect.objectContaining({
@@ -267,58 +271,47 @@ describe("RAG tools", () => {
       const code = results[0].code as string;
       const ctx = results[0].classContext as string;
 
-      // Code truncated to 1500 + suffix
       expect(code.length).toBeLessThan(1600);
       expect(code).toContain("… (truncated)");
-
-      // classContext truncated to 800 + suffix
       expect(ctx.length).toBeLessThan(900);
       expect(ctx).toContain("… (truncated)");
     });
 
     it("returns empty results when no matches found", async () => {
-      vi.mocked(rawQdrant.query).mockResolvedValue({
-        points: [],
-      } as never);
+      vi.mocked(rawQdrant.query).mockResolvedValue({ points: [] } as never);
 
       const result = await executeTool("../mastra/tools/search-code.js", {
         query: "anything",
       });
 
-      const results = result.results as unknown[];
-      expect(results).toHaveLength(0);
+      expect(result.results as unknown[]).toHaveLength(0);
       expect(result.message).toContain("No matching code found");
     });
   });
 
   describe("getArchitecture", () => {
     it("queries architecture collection and maps results", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.9,
-          metadata: {
-            title: "Auth Flow",
-            area: "auth",
-            text: "JWT-based authentication...",
-            keyFiles: ["AuthController.java", "JwtFilter.java"],
-          },
-        },
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.9, {
+          title: "Auth Flow",
+          area: "auth",
+          text: "JWT-based authentication...",
+          keyFiles: ["AuthController.java", "JwtFilter.java"],
+        }),
       ] as never);
 
       const result = await executeTool("../mastra/tools/get-architecture.js", {
         query: "authentication flow",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(
-        expect.objectContaining({ indexName: "architecture" }),
-      );
+      expect(rawQdrant.search).toHaveBeenCalledWith("architecture", expect.any(Object));
       const results = result.results as Record<string, unknown>[];
       expect(results[0]).toMatchObject({ area: "auth" });
       expect(results[0].keyFiles).toEqual(["AuthController.java", "JwtFilter.java"]);
     });
 
-    it("handles missing metadata gracefully", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([{ score: 0.5, metadata: {} }] as never);
+    it("handles missing payload gracefully", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([qdrantHit(0.5, {})] as never);
 
       const result = await executeTool("../mastra/tools/get-architecture.js", {
         query: "anything",
@@ -337,17 +330,14 @@ describe("RAG tools", () => {
 
   describe("searchSchemas", () => {
     it("queries schemas collection and maps all fields", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.87,
-          metadata: {
-            tableName: "request",
-            description: "Main request table",
-            text: "CREATE TABLE request...",
-            relations: ["project", "user"],
-            indexes: ["idx_request_status"],
-          },
-        },
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.87, {
+          tableName: "request",
+          description: "Main request table",
+          text: "CREATE TABLE request...",
+          relations: ["project", "user"],
+          indexes: ["idx_request_status"],
+        }),
       ] as never);
 
       const result = await executeTool("../mastra/tools/search-schemas.js", {
@@ -355,7 +345,7 @@ describe("RAG tools", () => {
         compact: false,
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ indexName: "schemas" }));
+      expect(rawQdrant.search).toHaveBeenCalledWith("schemas", expect.any(Object));
       const results = result.results as Record<string, unknown>[];
       expect(results[0]).toMatchObject({ tableName: "request" });
       expect(results[0].relations).toContain("project");
@@ -363,13 +353,14 @@ describe("RAG tools", () => {
     });
 
     it("passes tableName filter when provided", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/search-schemas.js", {
         query: "columns",
         tableName: "request",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "schemas",
         expect.objectContaining({
           filter: { must: [{ key: "tableName", match: { value: "request" } }] },
         }),
@@ -379,20 +370,17 @@ describe("RAG tools", () => {
 
   describe("searchReviews", () => {
     it("embeds query and returns mapped results with all review fields", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.91,
-          metadata: {
-            text: "Missing error handling in PaymentService",
-            severity: "warning",
-            category: "bug",
-            filePath: "src/services/PaymentService.java",
-            commitSha: "abc123",
-            author: "dev1",
-            date: "2025-05-01",
-            mergeMessage: "feat: add payment flow",
-          },
-        },
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.91, {
+          text: "Missing error handling in PaymentService",
+          severity: "warning",
+          category: "bug",
+          filePath: "src/services/PaymentService.java",
+          commitSha: "abc123",
+          author: "dev1",
+          date: "2025-05-01",
+          mergeMessage: "feat: add payment flow",
+        }),
       ] as never);
 
       const result = await executeTool("../mastra/tools/search-reviews.js", {
@@ -401,11 +389,11 @@ describe("RAG tools", () => {
       });
 
       expect(embedText).toHaveBeenCalledWith("payment issues");
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "reviews",
         expect.objectContaining({
-          indexName: "reviews",
-          queryVector: [0.1, 0.2, 0.3],
-          topK: 8,
+          vector: [0.1, 0.2, 0.3],
+          limit: 8,
         }),
       );
 
@@ -424,14 +412,15 @@ describe("RAG tools", () => {
     });
 
     it("passes severity and category filters to Qdrant", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/search-reviews.js", {
         query: "security issues",
         severity: "critical",
         category: "security",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "reviews",
         expect.objectContaining({
           filter: {
             must: [
@@ -444,16 +433,19 @@ describe("RAG tools", () => {
     });
 
     it("sends no filter when severity and category are omitted", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/search-reviews.js", {
         query: "anything",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ filter: undefined }));
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "reviews",
+        expect.objectContaining({ filter: undefined }),
+      );
     });
 
-    it("handles missing metadata with fallback defaults", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([{ score: 0.5, metadata: {} }] as never);
+    it("handles missing payload with fallback defaults", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([qdrantHit(0.5, {})] as never);
 
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "anything",
@@ -475,7 +467,7 @@ describe("RAG tools", () => {
     });
 
     it("returns recovery guidance when no results found", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "nonexistent",
         severity: "critical",
@@ -489,18 +481,15 @@ describe("RAG tools", () => {
 
   describe("getTestSuggestions", () => {
     it("embeds language+query and returns mapped results", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([
-        {
-          score: 0.85,
-          metadata: {
-            text: "describe('PaymentService', () => { ... })",
-            targetFile: "src/services/PaymentService.java",
-            testType: "unit",
-            language: "java",
-            commitSha: "def456",
-            date: "2025-05-01",
-          },
-        },
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.85, {
+          text: "describe('PaymentService', () => { ... })",
+          targetFile: "src/services/PaymentService.java",
+          testType: "unit",
+          language: "java",
+          commitSha: "def456",
+          date: "2025-05-01",
+        }),
       ] as never);
 
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
@@ -510,11 +499,11 @@ describe("RAG tools", () => {
       });
 
       expect(embedText).toHaveBeenCalledWith("java payment service");
-      expect(qdrant.query).toHaveBeenCalledWith(
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "test-suggestions",
         expect.objectContaining({
-          indexName: "test-suggestions",
-          queryVector: [0.1, 0.2, 0.3],
-          topK: 5,
+          vector: [0.1, 0.2, 0.3],
+          limit: 5,
           filter: { must: [{ key: "language", match: { value: "java" } }] },
         }),
       );
@@ -532,16 +521,19 @@ describe("RAG tools", () => {
     });
 
     it("sends no filter when language is omitted", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "anything",
       });
 
-      expect(qdrant.query).toHaveBeenCalledWith(expect.objectContaining({ filter: undefined }));
+      expect(rawQdrant.search).toHaveBeenCalledWith(
+        "test-suggestions",
+        expect.objectContaining({ filter: undefined }),
+      );
     });
 
-    it("handles missing metadata with fallback defaults", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([{ score: 0.5, metadata: {} }] as never);
+    it("handles missing payload with fallback defaults", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([qdrantHit(0.5, {})] as never);
 
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "anything",
@@ -561,7 +553,7 @@ describe("RAG tools", () => {
     });
 
     it("returns recovery guidance when no results found", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "nonexistent",
         language: "java",
@@ -573,7 +565,7 @@ describe("RAG tools", () => {
     });
 
     it("embeds only query when language is omitted", async () => {
-      vi.mocked(qdrant.query).mockResolvedValue([]);
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
       await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "auth flow",
       });

@@ -1,18 +1,19 @@
 // tools/get-change-summary.ts — "What did I miss?" tool.
 // Queries recent reviews and groups by area, severity, and author.
 
-import { createTool } from "@mastra/core/tools";
-import { z } from "zod/v4";
+import { tool } from "ai";
+import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
-import { qdrant } from "../infra.js";
+import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "reviews";
 
-interface ReviewResult {
+interface SearchResult {
   score?: number;
-  metadata?: Record<string, unknown>;
+  payload?: Record<string, unknown> | null;
 }
 
 function parseSince(since: string): string {
@@ -30,10 +31,10 @@ function parseSince(since: string): string {
   return now.toISOString().split("T")[0];
 }
 
-function groupByArea(reviews: ReviewResult[]) {
-  const groups: Record<string, ReviewResult[]> = {};
+function groupByArea(reviews: SearchResult[]) {
+  const groups: Record<string, SearchResult[]> = {};
   for (const r of reviews) {
-    const filePath = (r.metadata?.filePath as string) ?? "unknown";
+    const filePath = (r.payload?.filePath as string) ?? "unknown";
     // Extract area from file path (first directory segment)
     const parts = filePath.split("/");
     const area = parts.length > 1 ? parts[parts.length > 2 ? 1 : 0] : "root";
@@ -45,16 +46,16 @@ function groupByArea(reviews: ReviewResult[]) {
 
 function buildSummary(
   sinceDate: string,
-  reviews: ReviewResult[],
-  groups: Record<string, ReviewResult[]>,
+  reviews: SearchResult[],
+  groups: Record<string, SearchResult[]>,
 ) {
   const severity = { info: 0, warning: 0, critical: 0 };
   const authors = new Set<string>();
 
   for (const r of reviews) {
-    const sev = (r.metadata?.severity as string) ?? "info";
+    const sev = (r.payload?.severity as string) ?? "info";
     if (sev in severity) severity[sev as keyof typeof severity]++;
-    const author = (r.metadata?.author as string) ?? "";
+    const author = (r.payload?.author as string) ?? "";
     if (author) authors.add(author);
   }
 
@@ -71,11 +72,60 @@ function buildSummary(
   return lines.join("\n");
 }
 
-export const getChangeSummary = createTool({
-  id: "getChangeSummary",
-  mcp: {
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
+export async function executeGetChangeSummary(since = "1d", area?: string) {
+  const sinceDate = parseSince(since);
+
+  try {
+    const dims = env.EMBEDDING_DIMENSIONS as number;
+    const zeroVec = new Array(dims).fill(0);
+    const allResults = await rawQdrant.search(COLLECTION, {
+      vector: zeroVec,
+      limit: 50,
+      with_payload: true,
+    });
+    const results = allResults.filter((r) => {
+      const date = (r.payload?.date as string) ?? "";
+      if (date < sinceDate) return false;
+      if (area) {
+        const filePath = (r.payload?.filePath as string) ?? "";
+        return filePath.includes(area);
+      }
+      return true;
+    });
+
+    if (results.length === 0) {
+      return {
+        summary:
+          `No review data found since ${sinceDate}. ` +
+          "The nightly pipeline may not have run yet, or there were no merges in this period.",
+        changes: [],
+      };
+    }
+
+    const groups = groupByArea(results);
+    const summary = buildSummary(sinceDate, results, groups);
+
+    return {
+      summary,
+      changes: results.slice(0, 10).map((r) => ({
+        severity: (r.payload?.severity as string) ?? "info",
+        category: (r.payload?.category as string) ?? "unknown",
+        filePath: (r.payload?.filePath as string) ?? "unknown",
+        text: truncate((r.payload?.text as string) ?? "", 150),
+        author: (r.payload?.author as string) ?? "unknown",
+        date: (r.payload?.date as string) ?? "",
+      })),
+    };
+  } catch (err) {
+    logger.error({ err }, "getChangeSummary failed");
+    return {
+      summary: "Unable to generate change summary. The nightly pipeline may not have run yet.",
+      changes: [],
+    };
+  }
+}
+
+export const getChangeSummaryTool = tool({
   description:
     "Get a summary of what changed in the codebase over a time period. " +
     "Use when a developer asks 'what did I miss?', 'what changed this week?', " +
@@ -91,60 +141,5 @@ export const getChangeSummary = createTool({
       .optional()
       .describe("Focus on a specific code area, e.g. 'auth', 'services', 'frontend'"),
   }),
-
-  execute: async (inputData) => {
-    const { since, area } = inputData;
-    const sinceDate = parseSince(since);
-
-    try {
-      // Use a zero vector to fetch recent results, then filter by date in code.
-      // The Mastra wrapper's filter type doesn't support Qdrant range conditions,
-      // so we over-fetch and filter client-side (same pattern as getNightlySummary).
-      const zeroVec = new Array(768).fill(0);
-      const allResults = await qdrant.query({
-        indexName: COLLECTION,
-        queryVector: zeroVec,
-        topK: 50,
-      });
-      const results = allResults.filter((r) => {
-        const date = (r.metadata?.date as string) ?? "";
-        if (date < sinceDate) return false;
-        if (area) {
-          const filePath = (r.metadata?.filePath as string) ?? "";
-          return filePath.includes(area);
-        }
-        return true;
-      });
-
-      if (results.length === 0) {
-        return {
-          summary:
-            `No review data found since ${sinceDate}. ` +
-            "The nightly pipeline may not have run yet, or there were no merges in this period.",
-          changes: [],
-        };
-      }
-
-      const groups = groupByArea(results);
-      const summary = buildSummary(sinceDate, results, groups);
-
-      return {
-        summary,
-        changes: results.slice(0, 10).map((r) => ({
-          severity: r.metadata?.severity ?? "info",
-          category: r.metadata?.category ?? "unknown",
-          filePath: r.metadata?.filePath ?? "unknown",
-          text: truncate((r.metadata?.text as string) ?? "", 150),
-          author: r.metadata?.author ?? "unknown",
-          date: r.metadata?.date ?? "",
-        })),
-      };
-    } catch (err) {
-      logger.error({ err }, "getChangeSummary failed");
-      return {
-        summary: "Unable to generate change summary. The nightly pipeline may not have run yet.",
-        changes: [],
-      };
-    }
-  },
+  execute: ({ since, area }) => executeGetChangeSummary(since, area),
 });

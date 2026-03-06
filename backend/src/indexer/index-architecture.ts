@@ -2,12 +2,12 @@
 
 import { readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
-import { MDocument } from "@mastra/rag";
 
 import { logger } from "../config/logger.js";
-import { ensureCollection, qdrant } from "../mastra/infra.js";
+import { ensureCollection, rawQdrant } from "../mastra/infra.js";
 import { embedTexts, toUUID } from "./embed.js";
 import { findMarkdownFiles } from "./fs.js";
+import { splitText } from "./text-splitter.js";
 
 function extractField(content: string, field: string): string | null {
   const match = content.match(new RegExp(`^${field}:\\s*(.+)$`, "im"));
@@ -47,26 +47,23 @@ async function indexArchitectureDocs(standardsDir: string): Promise<number> {
     const keyFiles = extractListField(content, "keyFiles");
     const relPath = relative(standardsDir, filePath);
 
-    const doc = MDocument.fromText(content);
-    const chunks = await doc.chunk({
-      strategy: "recursive",
-      maxSize: 800,
-      overlap: 100,
-    });
+    const chunks = splitText(content, 800, 100);
     if (chunks.length === 0) continue;
 
     const embeddings = await embedTexts(chunks.map((c) => c.text));
 
-    await qdrant.upsert({
-      indexName: "architecture",
-      vectors: embeddings,
-      ids: chunks.map((_, i) => chunkId("architecture", relPath, i)),
-      metadata: chunks.map((c) => ({
-        text: c.text,
-        title,
-        area,
-        keyFiles,
-        sourceFile: relPath,
+    await rawQdrant.upsert("architecture", {
+      wait: true,
+      points: chunks.map((c, i) => ({
+        id: chunkId("architecture", relPath, i),
+        vector: embeddings[i],
+        payload: {
+          text: c.text,
+          title,
+          area,
+          keyFiles,
+          sourceFile: relPath,
+        },
       })),
     });
 
@@ -92,27 +89,24 @@ async function indexSchemaDocs(standardsDir: string): Promise<number> {
     const indexes = extractListField(content, "indexes");
     const relPath = relative(standardsDir, filePath);
 
-    const doc = MDocument.fromText(content);
-    const chunks = await doc.chunk({
-      strategy: "recursive",
-      maxSize: 600,
-      overlap: 80,
-    });
+    const chunks = splitText(content, 600, 80);
     if (chunks.length === 0) continue;
 
     const embeddings = await embedTexts(chunks.map((c) => c.text));
 
-    await qdrant.upsert({
-      indexName: "schemas",
-      vectors: embeddings,
-      ids: chunks.map((_, i) => chunkId("schemas", relPath, i)),
-      metadata: chunks.map((c) => ({
-        text: c.text,
-        tableName,
-        description,
-        relations,
-        indexes,
-        sourceFile: relPath,
+    await rawQdrant.upsert("schemas", {
+      wait: true,
+      points: chunks.map((c, i) => ({
+        id: chunkId("schemas", relPath, i),
+        vector: embeddings[i],
+        payload: {
+          text: c.text,
+          tableName,
+          description,
+          relations,
+          indexes,
+          sourceFile: relPath,
+        },
       })),
     });
 

@@ -8,7 +8,6 @@ const originalEnv = { ...process.env };
 
 // Must run before import — env.ts parses on load (no .env file in CI)
 process.env.DATABASE_URL = "postgresql://test:test@localhost:5432/test";
-process.env.OPENROUTER_API_KEY = "sk-or-v1-test";
 process.env.JWT_SECRET = "a-test-secret-that-is-at-least-32-characters!!";
 
 const { env, envSchema, getRepoConfigs } = await import("../config/env.js");
@@ -22,13 +21,21 @@ afterAll(() => {
 
 const validEnv = {
   DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
-  OPENROUTER_API_KEY: "sk-or-v1-test",
   JWT_SECRET: "a-secret-that-is-at-least-32-chars-long!!",
 };
 
 const ollamaEnv = {
   DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
   MODEL_PROVIDER: "ollama",
+  JWT_SECRET: "a-secret-that-is-at-least-32-chars-long!!",
+};
+
+const openaiCompatibleEnv = {
+  DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
+  MODEL_PROVIDER: "openai-compatible",
+  INFERENCE_BASE_URL: "https://api.openai.com/v1",
+  INFERENCE_MODEL: "gpt-4o",
+  INFERENCE_EMBEDDING_MODEL: "text-embedding-3-small",
   JWT_SECRET: "a-secret-that-is-at-least-32-chars-long!!",
 };
 
@@ -41,10 +48,8 @@ describe("envSchema", () => {
       expect(result.data.NODE_ENV).toBe("development");
       expect(result.data.REDIS_URL).toBe("redis://localhost:6379");
       expect(result.data.QDRANT_URL).toBe("http://localhost:6333");
-      expect(result.data.OPENROUTER_MODEL).toBe("minimax/minimax-m2.5");
-      expect(result.data.EMBEDDING_MODEL).toBe("qwen/qwen3-embedding-8b");
       expect(result.data.CORS_ORIGINS).toBe("http://localhost:5173,http://localhost:5174");
-      expect(result.data.MODEL_PROVIDER).toBe("openrouter");
+      expect(result.data.MODEL_PROVIDER).toBe("ollama");
     }
   });
 
@@ -56,20 +61,7 @@ describe("envSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("fails when OPENROUTER_API_KEY is empty with openrouter provider", () => {
-    const result = envSchema.safeParse({ ...validEnv, OPENROUTER_API_KEY: "" });
-    expect(result.success).toBe(false);
-  });
-
-  it("fails when OPENROUTER_API_KEY is missing with openrouter provider", () => {
-    const result = envSchema.safeParse({
-      ...validEnv,
-      OPENROUTER_API_KEY: undefined,
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("allows missing OPENROUTER_API_KEY with ollama provider", () => {
+  it("allows missing INFERENCE_BASE_URL with ollama provider", () => {
     const result = envSchema.safeParse(ollamaEnv);
     expect(result.success).toBe(true);
     if (result.success) {
@@ -80,11 +72,38 @@ describe("envSchema", () => {
     }
   });
 
-  it("defaults MODEL_PROVIDER to openrouter", () => {
+  it("fails when INFERENCE_BASE_URL is missing with openai-compatible provider", () => {
+    const result = envSchema.safeParse({
+      ...validEnv,
+      MODEL_PROVIDER: "openai-compatible",
+      INFERENCE_MODEL: "gpt-4o",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("fails when INFERENCE_MODEL is missing with openai-compatible provider", () => {
+    const result = envSchema.safeParse({
+      ...validEnv,
+      MODEL_PROVIDER: "openai-compatible",
+      INFERENCE_BASE_URL: "https://api.openai.com/v1",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts openai-compatible provider with required fields", () => {
+    const result = envSchema.safeParse(openaiCompatibleEnv);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.MODEL_PROVIDER).toBe("openai-compatible");
+      expect(result.data.INFERENCE_BASE_URL).toBe("https://api.openai.com/v1");
+    }
+  });
+
+  it("defaults MODEL_PROVIDER to ollama", () => {
     const result = envSchema.safeParse(validEnv);
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.MODEL_PROVIDER).toBe("openrouter");
+      expect(result.data.MODEL_PROVIDER).toBe("ollama");
     }
   });
 

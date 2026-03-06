@@ -1,9 +1,8 @@
-// server.ts — Hono web server with Mastra agent, Pino logging,
+// server.ts — Hono web server with Pino logging,
 // Redis rate limiting, SSE streaming, and background jobs.
 
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
-import { MastraServer } from "@mastra/hono";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -20,12 +19,12 @@ import { redis } from "./config/redis.js";
 import { connection, db } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
 import { indexQueue, scheduleNightlyJobs, startIndexWorker } from "./jobs/queue.js";
-import { mastra, qdrant } from "./mastra/index.js";
+import { deleteCollection, listCollections, rawQdrant } from "./mastra/infra.js";
 import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limiter.js";
 import adminRouter from "./routes/admin.js";
 import authRouter from "./routes/auth.js";
 import chatRouter from "./routes/chat.js";
-import mcpRouter, { mcpServer } from "./routes/mcp.js";
+import mcpRouter from "./routes/mcp.js";
 
 const app = new Hono<{ Variables: JwtVariables }>();
 
@@ -93,7 +92,7 @@ app.get("/api/health", async (c) => {
   } catch {}
 
   try {
-    await qdrant.listIndexes();
+    await rawQdrant.getCollections();
     checks.qdrant = true;
   } catch {}
 
@@ -113,13 +112,6 @@ app.get("/api/health", async (c) => {
 
 app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.0.0" }));
 
-// --- MastraServer ---
-// Protect Mastra-managed routes (agent invocation, tool execution, workflows)
-// behind JWT auth so they are not publicly accessible.
-app.use("/api/mastra/*", cookieAuth);
-
-const mastraServer = new MastraServer({ app, mastra });
-
 // --- Startup + Shutdown ---
 
 let httpServer: ServerType;
@@ -127,7 +119,6 @@ let indexWorker: Awaited<ReturnType<typeof startIndexWorker>> | undefined;
 
 async function start(): Promise<void> {
   await runMigrations();
-  await mastraServer.init();
 
   indexWorker = startIndexWorker();
   await scheduleNightlyJobs();
@@ -137,7 +128,7 @@ async function start(): Promise<void> {
   const currentEmbeddingId =
     env.MODEL_PROVIDER === "ollama"
       ? `ollama:${env.OLLAMA_EMBEDDING_MODEL}`
-      : `openrouter:${env.EMBEDDING_MODEL}`;
+      : `openai-compatible:${env.INFERENCE_EMBEDDING_MODEL ?? "unknown"}`;
   try {
     const prevModel = await redis.get("tiburcio:embedding-model");
     if (prevModel && prevModel !== currentEmbeddingId) {
@@ -145,9 +136,9 @@ async function start(): Promise<void> {
         { previous: prevModel, current: currentEmbeddingId },
         "Embedding model changed — dropping all collections for re-indexing",
       );
-      const collections = await qdrant.listIndexes();
+      const collections = await listCollections();
       for (const name of collections) {
-        await qdrant.deleteIndex({ indexName: name });
+        await deleteCollection(name);
       }
     }
     await redis.set("tiburcio:embedding-model", currentEmbeddingId);
@@ -161,7 +152,7 @@ async function start(): Promise<void> {
   //  - Restart after partial failure: only missing ones are re-queued
   //  - CODEBASE_REPOS added later: codebase gets indexed on next restart
   try {
-    const collections = await qdrant.listIndexes();
+    const collections = await listCollections();
     const existing = new Set(collections);
 
     if (!existing.has("standards")) {
@@ -203,7 +194,6 @@ async function shutdown(signal: string): Promise<void> {
   }, 30_000).unref();
 
   httpServer?.close();
-  await mcpServer.close().catch(() => {});
   await indexWorker?.close().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});

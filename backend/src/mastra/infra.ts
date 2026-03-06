@@ -1,61 +1,37 @@
 // mastra/infra.ts — Shared infrastructure singletons.
-// Single source of truth for Qdrant clients, LLM models, and embedding models.
-// MODEL_PROVIDER switches between local Ollama and cloud OpenRouter.
-//
-// Two Qdrant clients:
-//   qdrant  — Mastra QdrantVector wrapper (simple upsert/query/delete)
-//   rawQdrant — @qdrant/js-client-rest for sparse vectors & hybrid Query API
+// Single source of truth for Qdrant client, LLM models, and embedding models.
+// MODEL_PROVIDER switches between local Ollama and any OpenAI-compatible endpoint.
 
-import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import type { EmbeddingModelV3, LanguageModelV3 } from "@ai-sdk/provider";
-import { QdrantVector } from "@mastra/qdrant";
-import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { QdrantClient } from "@qdrant/js-client-rest";
 
 import { env } from "../config/env.js";
+import { getChatModel, getEmbeddingModel } from "../lib/model-provider.js";
 
 // --- Qdrant ---
 
-export const qdrant = new QdrantVector({
-  url: env.QDRANT_URL,
-  id: "qdrant",
-});
-
-/** Raw Qdrant client for sparse vectors and the Query API (prefetch + RRF). */
+/** Qdrant client for all vector operations (upsert, search, Query API, sparse vectors). */
 export const rawQdrant = new QdrantClient({ url: env.QDRANT_URL });
 
 // --- Model Provider ---
-// Ollama exposes an OpenAI-compatible API at /v1, so we use @ai-sdk/openai-compatible.
-
-function createChatModel() {
-  if (env.MODEL_PROVIDER === "ollama") {
-    const ollama = createOpenAICompatible({ name: "ollama", baseURL: `${env.OLLAMA_BASE_URL}/v1` });
-    return ollama.languageModel(env.OLLAMA_CHAT_MODEL);
-  }
-  const openrouter = createOpenRouter({ apiKey: env.OPENROUTER_API_KEY as string });
-  return openrouter.chat(env.OPENROUTER_MODEL, {
-    provider: { only: [env.OPENROUTER_PROVIDER] },
-  });
-}
-
-function createEmbeddingModel() {
-  if (env.MODEL_PROVIDER === "ollama") {
-    const ollama = createOpenAICompatible({ name: "ollama", baseURL: `${env.OLLAMA_BASE_URL}/v1` });
-    return ollama.textEmbeddingModel(env.OLLAMA_EMBEDDING_MODEL);
-  }
-  const openrouter = createOpenRouter({ apiKey: env.OPENROUTER_API_KEY as string });
-  return openrouter.textEmbeddingModel(env.EMBEDDING_MODEL, {
-    provider: { only: [env.EMBEDDING_PROVIDER] },
-  });
-}
 
 /** Chat/completion model for agents and contextualization. */
-export const chatModel: LanguageModelV3 = createChatModel() as LanguageModelV3;
+export const chatModel = getChatModel();
 
 /** Text embedding model for vector indexing and search. */
-export const embeddingModel: EmbeddingModelV3 = createEmbeddingModel() as EmbeddingModelV3;
+export const embeddingModel = getEmbeddingModel();
 
 // --- Collections ---
+
+/** List all Qdrant collection names. */
+export async function listCollections(): Promise<string[]> {
+  const { collections } = await rawQdrant.getCollections();
+  return collections.map((c) => c.name);
+}
+
+/** Delete a Qdrant collection by name. */
+export async function deleteCollection(name: string): Promise<void> {
+  await rawQdrant.deleteCollection(name);
+}
 
 /**
  * Create a Qdrant collection if it doesn't already exist.
@@ -74,10 +50,8 @@ export async function ensureCollection(
         sparse_vectors: { bm25: { modifier: "idf" } },
       });
     } else {
-      await qdrant.createIndex({
-        indexName: name,
-        dimension: dimensions,
-        metric: "cosine",
+      await rawQdrant.createCollection(name, {
+        vectors: { size: dimensions, distance: "Cosine" },
       });
     }
   } catch (e: unknown) {

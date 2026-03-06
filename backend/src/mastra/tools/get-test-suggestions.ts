@@ -1,20 +1,72 @@
 // tools/get-test-suggestions.ts — Search AI-generated test suggestions via Qdrant.
 
-import { createTool } from "@mastra/core/tools";
-import { z } from "zod/v4";
+import { tool } from "ai";
+import { z } from "zod";
 
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
-import { qdrant } from "../infra.js";
+import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "test-suggestions";
 
-export const getTestSuggestions = createTool({
-  id: "getTestSuggestions",
-  mcp: {
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
+export async function executeGetTestSuggestions(
+  query: string,
+  language?: string,
+  since?: string,
+  compact = true,
+) {
+  const textToEmbed = [language, query].filter(Boolean).join(" ");
+  const embedding = await embedText(textToEmbed);
+
+  const conditions: Array<Record<string, unknown>> = [];
+  if (language) conditions.push({ key: "language", match: { value: language } });
+  if (since) conditions.push({ key: "date", range: { gte: since } });
+
+  const filter = conditions.length > 0 ? { must: conditions } : undefined;
+
+  try {
+    const results = await rawQdrant.search(COLLECTION, {
+      vector: embedding,
+      limit: compact ? 3 : 5,
+      filter,
+      with_payload: true,
+    });
+
+    if (results.length === 0) {
+      return {
+        results: [],
+        message:
+          "No test suggestions found. The nightly pipeline may not have run yet. " +
+          (language ? "Try removing the language filter. " : "") +
+          "Try searchReviews for recent changes, or searchCode for existing test files.",
+      };
+    }
+
+    return {
+      results: results.map((r) => ({
+        suggestion: compact
+          ? truncate((r.payload?.text as string) ?? "", 200)
+          : truncate((r.payload?.text as string) ?? "", 2000),
+        targetFile: (r.payload?.targetFile as string) ?? "unknown",
+        testType: (r.payload?.testType as string) ?? "unit",
+        language: (r.payload?.language as string) ?? "unknown",
+        ...(compact ? {} : { commitSha: (r.payload?.commitSha as string) ?? "" }),
+        date: (r.payload?.date as string) ?? "",
+        score: r.score ?? 0,
+      })),
+    };
+  } catch (err) {
+    logger.error({ err, collection: COLLECTION }, "Tool query failed");
+    return {
+      results: [],
+      message:
+        "Test suggestions collection not yet indexed. The nightly pipeline may not have run yet.",
+    };
+  }
+}
+
+export const getTestSuggestionsTool = tool({
   description:
     "Get AI-generated test suggestions for recently merged code. " +
     "Returns test scaffolds based on team conventions and existing test patterns. " +
@@ -38,57 +90,6 @@ export const getTestSuggestions = createTool({
           "When false, returns full test scaffold suggestion.",
       ),
   }),
-
-  execute: async (inputData) => {
-    const { query, language, since, compact } = inputData;
-
-    const textToEmbed = [language, query].filter(Boolean).join(" ");
-    const embedding = await embedText(textToEmbed);
-
-    const conditions: Array<Record<string, unknown>> = [];
-    if (language) conditions.push({ key: "language", match: { value: language } });
-    if (since) conditions.push({ key: "date", range: { gte: since } });
-
-    const filter = conditions.length > 0 ? { must: conditions } : undefined;
-
-    try {
-      const results = await qdrant.query({
-        indexName: COLLECTION,
-        queryVector: embedding,
-        topK: compact ? 3 : 5,
-        filter,
-      });
-
-      if (results.length === 0) {
-        return {
-          results: [],
-          message:
-            "No test suggestions found. The nightly pipeline may not have run yet. " +
-            (language ? "Try removing the language filter. " : "") +
-            "Try searchReviews for recent changes, or searchCode for existing test files.",
-        };
-      }
-
-      return {
-        results: results.map((r) => ({
-          suggestion: compact
-            ? truncate((r.metadata?.text as string) ?? "", 200)
-            : truncate((r.metadata?.text as string) ?? "", 2000),
-          targetFile: r.metadata?.targetFile ?? "unknown",
-          testType: r.metadata?.testType ?? "unit",
-          language: r.metadata?.language ?? "unknown",
-          ...(compact ? {} : { commitSha: r.metadata?.commitSha ?? "" }),
-          date: r.metadata?.date ?? "",
-          score: r.score ?? 0,
-        })),
-      };
-    } catch (err) {
-      logger.error({ err, collection: COLLECTION }, "Tool query failed");
-      return {
-        results: [],
-        message:
-          "Test suggestions collection not yet indexed. The nightly pipeline may not have run yet.",
-      };
-    }
-  },
+  execute: ({ query, language, since, compact }) =>
+    executeGetTestSuggestions(query, language, since, compact),
 });

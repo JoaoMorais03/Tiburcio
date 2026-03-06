@@ -2,12 +2,12 @@
 
 import { readFile } from "node:fs/promises";
 import { basename, dirname, relative } from "node:path";
-import { MDocument } from "@mastra/rag";
 
 import { logger } from "../config/logger.js";
-import { ensureCollection, qdrant } from "../mastra/infra.js";
+import { ensureCollection, rawQdrant } from "../mastra/infra.js";
 import { embedTexts, toUUID } from "./embed.js";
 import { findMarkdownFiles } from "./fs.js";
+import { splitText } from "./text-splitter.js";
 
 const COLLECTION = "standards";
 
@@ -39,26 +39,23 @@ export async function indexStandards(
     const meta = extractMetadata(content, filePath, standardsDir);
     const relPath = relative(standardsDir, filePath);
 
-    const doc = MDocument.fromText(content);
-    const chunks = await doc.chunk({
-      strategy: "recursive",
-      maxSize: 1000,
-      overlap: 100,
-    });
+    const chunks = splitText(content, 1000, 100);
     if (chunks.length === 0) continue;
 
     const embeddings = await embedTexts(chunks.map((c) => c.text));
 
-    await qdrant.upsert({
-      indexName: COLLECTION,
-      vectors: embeddings,
-      ids: chunks.map((_, i) => chunkId(relPath, i)),
-      metadata: chunks.map((c) => ({
-        text: c.text,
-        title: meta.title,
-        category: meta.category,
-        tags: meta.tags,
-        sourceFile: relPath,
+    await rawQdrant.upsert(COLLECTION, {
+      wait: true,
+      points: chunks.map((c, i) => ({
+        id: chunkId(relPath, i),
+        vector: embeddings[i],
+        payload: {
+          text: c.text,
+          title: meta.title,
+          category: meta.category,
+          tags: meta.tags,
+          sourceFile: relPath,
+        },
       })),
     });
 

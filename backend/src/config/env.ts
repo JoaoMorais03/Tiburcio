@@ -1,5 +1,5 @@
 // config/env.ts — Zod-validated environment variables.
-// MODEL_PROVIDER selects between local Ollama and cloud OpenRouter inference.
+// MODEL_PROVIDER selects between local Ollama and any OpenAI-compatible endpoint.
 
 import { config } from "dotenv";
 import { z } from "zod/v4";
@@ -13,20 +13,19 @@ const baseSchema = z.object({
 
   QDRANT_URL: z.string().default("http://localhost:6333"),
 
-  // Model provider: "ollama" for local inference, "openrouter" for cloud
-  MODEL_PROVIDER: z.enum(["ollama", "openrouter"]).default("openrouter"),
+  // Model provider: "ollama" for local inference, "openai-compatible" for vLLM/OpenRouter/etc.
+  MODEL_PROVIDER: z.enum(["ollama", "openai-compatible"]).default("ollama"),
 
   // Ollama settings (used when MODEL_PROVIDER=ollama)
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
   OLLAMA_CHAT_MODEL: z.string().default("qwen3:8b"),
   OLLAMA_EMBEDDING_MODEL: z.string().default("nomic-embed-text"),
 
-  // OpenRouter settings (used when MODEL_PROVIDER=openrouter)
-  OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_MODEL: z.string().default("minimax/minimax-m2.5"),
-  OPENROUTER_PROVIDER: z.string().default("together"),
-  EMBEDDING_MODEL: z.string().default("qwen/qwen3-embedding-8b"),
-  EMBEDDING_PROVIDER: z.string().default("nebius"),
+  // OpenAI-compatible settings (used when MODEL_PROVIDER=openai-compatible)
+  INFERENCE_BASE_URL: z.string().optional(),
+  INFERENCE_API_KEY: z.string().optional(),
+  INFERENCE_MODEL: z.string().optional(),
+  INFERENCE_EMBEDDING_MODEL: z.string().optional(),
 
   // Embedding vector dimensions: 768 for nomic-embed-text, 4096 for qwen3-embedding-8b.
   // Must match the chosen embedding model. Auto-defaults based on MODEL_PROVIDER.
@@ -57,11 +56,15 @@ const baseSchema = z.object({
 
 export const envSchema = baseSchema.refine(
   (data) =>
-    data.MODEL_PROVIDER !== "openrouter" ||
-    (data.OPENROUTER_API_KEY != null && data.OPENROUTER_API_KEY.length > 0),
+    data.MODEL_PROVIDER !== "openai-compatible" ||
+    (data.INFERENCE_BASE_URL != null &&
+      data.INFERENCE_BASE_URL.length > 0 &&
+      data.INFERENCE_MODEL != null &&
+      data.INFERENCE_MODEL.length > 0),
   {
-    message: "OPENROUTER_API_KEY is required when MODEL_PROVIDER is 'openrouter'",
-    path: ["OPENROUTER_API_KEY"],
+    message:
+      "INFERENCE_BASE_URL and INFERENCE_MODEL are required when MODEL_PROVIDER is 'openai-compatible'",
+    path: ["INFERENCE_BASE_URL"],
   },
 );
 
