@@ -1,24 +1,14 @@
 // mastra/infra.ts — Shared infrastructure singletons.
-// Single source of truth for Qdrant client, LLM models, and embedding models.
-// MODEL_PROVIDER switches between local Ollama and any OpenAI-compatible endpoint.
+// Single source of truth for Qdrant client and collection management.
 
 import { QdrantClient } from "@qdrant/js-client-rest";
 
 import { env } from "../config/env.js";
-import { getChatModel, getEmbeddingModel } from "../lib/model-provider.js";
 
 // --- Qdrant ---
 
 /** Qdrant client for all vector operations (upsert, search, Query API, sparse vectors). */
 export const rawQdrant = new QdrantClient({ url: env.QDRANT_URL });
-
-// --- Model Provider ---
-
-/** Chat/completion model for agents and contextualization. */
-export const chatModel = getChatModel();
-
-/** Text embedding model for vector indexing and search. */
-export const embeddingModel = getEmbeddingModel();
 
 // --- Collections ---
 

@@ -4,7 +4,6 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
@@ -23,7 +22,7 @@ function countBySeverity(results: SearchResult[]) {
   return counts;
 }
 
-function filterRecent(results: SearchResult[], cutoffStr: string) {
+function _filterRecent(results: SearchResult[], cutoffStr: string) {
   return results.filter((r) => {
     const date = (r.payload?.date as string) ?? "";
     return date >= cutoffStr;
@@ -66,29 +65,29 @@ function buildBriefing(
 }
 
 export async function executeGetNightlySummary(daysBack = 1) {
+  const safeBack = Math.min(Math.max(daysBack, 1), 90);
   const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - daysBack);
+  cutoff.setDate(cutoff.getDate() - safeBack);
   const cutoffStr = cutoff.toISOString().split("T")[0];
 
   try {
-    const dims = env.EMBEDDING_DIMENSIONS as number;
-    const zeroVec = new Array(dims).fill(0);
-    const [reviews, testSuggestions] = await Promise.all([
+    const dateFilter = { must: [{ key: "date", range: { gte: cutoffStr } }] };
+    const [reviewsResult, testSuggestionsResult] = await Promise.all([
       rawQdrant
-        .search("reviews", { vector: zeroVec, limit: 50, with_payload: true })
-        .catch(() => []),
+        .scroll("reviews", { filter: dateFilter, limit: 50, with_payload: true })
+        .catch(() => ({ points: [] })),
       rawQdrant
-        .search("test-suggestions", { vector: zeroVec, limit: 20, with_payload: true })
-        .catch(() => []),
+        .scroll("test-suggestions", { filter: dateFilter, limit: 20, with_payload: true })
+        .catch(() => ({ points: [] })),
     ]);
 
-    const recentReviews = filterRecent(reviews, cutoffStr);
-    const recentTests = filterRecent(testSuggestions, cutoffStr);
+    const recentReviews = reviewsResult.points;
+    const recentTests = testSuggestionsResult.points;
 
     if (recentReviews.length === 0 && recentTests.length === 0) {
       return {
         summary:
-          `No nightly intelligence data found for the last ${daysBack} day(s). ` +
+          `No nightly intelligence data found for the last ${safeBack} day(s). ` +
           "The nightly pipeline may not have run yet, or there were no merges to review.",
         testGaps: [],
       };
@@ -103,7 +102,7 @@ export async function executeGetNightlySummary(daysBack = 1) {
 
     return {
       summary: buildBriefing(
-        daysBack,
+        safeBack,
         recentReviews.length,
         severity,
         warningFiles.size,
@@ -132,8 +131,10 @@ export const getNightlySummaryTool = tool({
   inputSchema: z.object({
     daysBack: z
       .number()
+      .min(1)
+      .max(90)
       .default(1)
-      .describe("How many days back to summarize (default: 1 for yesterday)"),
+      .describe("How many days back to summarize (default: 1 for yesterday, max: 90)"),
   }),
   execute: ({ daysBack }) => executeGetNightlySummary(daysBack),
 });

@@ -2,7 +2,7 @@
 // MODEL_PROVIDER selects between local Ollama and any OpenAI-compatible endpoint.
 
 import { config } from "dotenv";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 config({ path: "../.env" });
 
@@ -56,25 +56,36 @@ const baseSchema = z.object({
   NEO4J_URI: z.string().optional(),
   NEO4J_PASSWORD: z.string().optional(),
 
+  // Set to true after initial team accounts are created to prevent new self-registration.
+  DISABLE_REGISTRATION: z.coerce.boolean().default(false),
+
   CORS_ORIGINS: z.string().default("http://localhost:5173,http://localhost:5174"),
 
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
 });
 
-export const envSchema = baseSchema.refine(
-  (data) =>
-    data.MODEL_PROVIDER !== "openai-compatible" ||
-    (data.INFERENCE_BASE_URL != null &&
-      data.INFERENCE_BASE_URL.length > 0 &&
-      data.INFERENCE_MODEL != null &&
-      data.INFERENCE_MODEL.length > 0),
-  {
-    message:
-      "INFERENCE_BASE_URL and INFERENCE_MODEL are required when MODEL_PROVIDER is 'openai-compatible'",
-    path: ["INFERENCE_BASE_URL"],
-  },
-);
+export const envSchema = baseSchema
+  .refine(
+    (data) =>
+      data.MODEL_PROVIDER !== "openai-compatible" ||
+      (data.INFERENCE_BASE_URL != null &&
+        data.INFERENCE_BASE_URL.length > 0 &&
+        data.INFERENCE_MODEL != null &&
+        data.INFERENCE_MODEL.length > 0),
+    {
+      message:
+        "INFERENCE_BASE_URL and INFERENCE_MODEL are required when MODEL_PROVIDER is 'openai-compatible'",
+      path: ["INFERENCE_BASE_URL"],
+    },
+  )
+  .refine(
+    (data) => !data.NEO4J_URI || (data.NEO4J_PASSWORD != null && data.NEO4J_PASSWORD.length > 0),
+    {
+      message: "NEO4J_PASSWORD is required when NEO4J_URI is configured",
+      path: ["NEO4J_PASSWORD"],
+    },
+  );
 
 export type Env = z.infer<typeof envSchema>;
 

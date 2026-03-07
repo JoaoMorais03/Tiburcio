@@ -56,10 +56,12 @@ function upsertTableRef(
   fromId: string,
   repo: string,
   nodes: GraphNode[],
+  seenIds: Set<string>,
   edges: GraphEdge[],
 ): void {
   const tableId = `table::${tableName}`;
-  if (!nodes.find((n) => n.id === tableId)) {
+  if (!seenIds.has(tableId)) {
+    seenIds.add(tableId);
     nodes.push({ type: "Table", id: tableId, name: tableName, filePath: "", repo });
   }
   edges.push({ from: fromId, to: tableId, type: "QUERIES", resolved: true });
@@ -84,13 +86,14 @@ function extractSqlTableRefs(
   fromId: string,
   repo: string,
   nodes: GraphNode[],
+  seenIds: Set<string>,
   edges: GraphEdge[],
 ): void {
   const sqlRe = /(?:FROM|INTO|UPDATE|JOIN)\s+["'`]?([a-z_][a-z0-9_]{2,})["'`]?/gi;
   for (const m of sql.matchAll(sqlRe)) {
     const tableName = m[1].toLowerCase();
     if (!SQL_SKIP_WORDS.has(tableName)) {
-      upsertTableRef(tableName, fromId, repo, nodes, edges);
+      upsertTableRef(tableName, fromId, repo, nodes, seenIds, edges);
     }
   }
 }
@@ -101,6 +104,7 @@ function extractTypeScript(
   fileId: string,
   repo: string,
   nodes: GraphNode[],
+  seenIds: Set<string>,
   edges: GraphEdge[],
   allFilePaths: Set<string>,
 ): void {
@@ -119,7 +123,8 @@ function extractTypeScript(
   for (const m of content.matchAll(classRe)) {
     const className = m[1];
     const nodeId = `${fileId}::${className}`;
-    if (!nodes.find((n) => n.id === nodeId)) {
+    if (!seenIds.has(nodeId)) {
+      seenIds.add(nodeId);
       nodes.push({ type: "Class", id: nodeId, name: className, filePath, repo });
     }
     if (m[2]) {
@@ -132,13 +137,14 @@ function extractTypeScript(
   for (const m of content.matchAll(fnRe)) {
     const fnName = m[1];
     const nodeId = `${fileId}::${fnName}`;
-    if (!nodes.find((n) => n.id === nodeId)) {
+    if (!seenIds.has(nodeId)) {
+      seenIds.add(nodeId);
       nodes.push({ type: "Function", id: nodeId, name: fnName, filePath, repo });
     }
   }
 
   // TABLE REFERENCES: raw SQL patterns in strings / template literals
-  extractSqlTableRefs(content, fileId, repo, nodes, edges);
+  extractSqlTableRefs(content, fileId, repo, nodes, seenIds, edges);
 }
 
 function extractJava(
@@ -147,6 +153,7 @@ function extractJava(
   fileId: string,
   repo: string,
   nodes: GraphNode[],
+  seenIds: Set<string>,
   edges: GraphEdge[],
   allFilePaths: Set<string>,
 ): void {
@@ -164,7 +171,8 @@ function extractJava(
   for (const m of content.matchAll(classRe)) {
     const className = m[1];
     const nodeId = `${fileId}::${className}`;
-    if (!nodes.find((n) => n.id === nodeId)) {
+    if (!seenIds.has(nodeId)) {
+      seenIds.add(nodeId);
       nodes.push({ type: "Class", id: nodeId, name: className, filePath, repo });
     }
     if (m[2]) edges.push({ from: nodeId, to: m[2], type: "EXTENDS", resolved: false });
@@ -173,21 +181,21 @@ function extractJava(
   // @Table(name="...")
   const tableAnnotRe = /@Table\s*\(\s*name\s*=\s*["']([^"']+)["']/g;
   for (const m of content.matchAll(tableAnnotRe)) {
-    upsertTableRef(m[1], fileId, repo, nodes, edges);
+    upsertTableRef(m[1], fileId, repo, nodes, seenIds, edges);
   }
 
   // @Query / @NativeQuery SQL extraction
   const queryAnnotRe = /@(?:Query|NativeQuery)\s*\(\s*["']([^"']+)["']/g;
   for (const m of content.matchAll(queryAnnotRe)) {
     for (const sm of m[1].matchAll(/(?:FROM|JOIN)\s+(\w+)/gi)) {
-      upsertTableRef(sm[1].toLowerCase(), fileId, repo, nodes, edges);
+      upsertTableRef(sm[1].toLowerCase(), fileId, repo, nodes, seenIds, edges);
     }
   }
 
   // Repository naming convention: OrderRepository -> table "order"
   const repoNameRe = /class\s+(\w+)Repository/g;
   for (const m of content.matchAll(repoNameRe)) {
-    upsertTableRef(m[1].toLowerCase(), fileId, repo, nodes, edges);
+    upsertTableRef(m[1].toLowerCase(), fileId, repo, nodes, seenIds, edges);
   }
 }
 
@@ -208,6 +216,8 @@ export function extractGraph(
   if (!isTS && !isJava) return { nodes: [], edges: [] };
 
   const fileId = filePath;
+  const seenIds = new Set<string>();
+  seenIds.add(fileId);
   const nodes: GraphNode[] = [
     {
       type: "File",
@@ -219,8 +229,8 @@ export function extractGraph(
   ];
   const edges: GraphEdge[] = [];
 
-  if (isTS) extractTypeScript(content, filePath, fileId, repo, nodes, edges, allFilePaths);
-  if (isJava) extractJava(content, filePath, fileId, repo, nodes, edges, allFilePaths);
+  if (isTS) extractTypeScript(content, filePath, fileId, repo, nodes, seenIds, edges, allFilePaths);
+  if (isJava) extractJava(content, filePath, fileId, repo, nodes, seenIds, edges, allFilePaths);
 
   return { nodes, edges };
 }

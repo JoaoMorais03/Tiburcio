@@ -19,7 +19,7 @@ export function getGraphDriver(): Driver {
   if (!_driver) {
     _driver = neo4j.driver(
       env.NEO4J_URI as string,
-      neo4j.auth.basic("neo4j", env.NEO4J_PASSWORD ?? "tiburcio"),
+      neo4j.auth.basic("neo4j", env.NEO4J_PASSWORD as string),
       {
         logging: {
           level: "warn",

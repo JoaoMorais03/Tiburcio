@@ -5,7 +5,7 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import type { JwtVariables } from "hono/jwt";
 import { streamSSE } from "hono/streaming";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { logger } from "../config/logger.js";
 import { db } from "../db/connection.js";

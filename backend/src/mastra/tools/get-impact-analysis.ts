@@ -15,7 +15,7 @@ interface ImpactRow {
   depth: number;
 }
 
-const CYPHER_BY_TYPE: Record<string, string> = {
+const CYPHER_BY_TYPE: Record<"file" | "function" | "class" | "table", string> = {
   file: `
     MATCH path = (dep)-[:IMPORTS*1..$depth]->(target:File {filePath: $target})
     WHERE dep.repo = $repo OR $repo = ''
@@ -54,6 +54,14 @@ export async function executeGetImpactAnalysis(
       message:
         "Graph features require NEO4J_URI to be configured. " +
         "Start Neo4j with: docker compose --profile graph up -d",
+    };
+  }
+
+  if (targetType === "function") {
+    return {
+      available: false,
+      message:
+        "Function-level impact analysis is not yet supported. The graph layer tracks file imports, class inheritance, and table queries. Use targetType: 'file' or 'class' instead.",
     };
   }
 

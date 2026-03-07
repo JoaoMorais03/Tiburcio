@@ -1,6 +1,6 @@
 # Tiburcio — Claude Code Configuration
 
-Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 9 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
+Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 10 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
 
 ## Philosophy
 
@@ -54,7 +54,7 @@ docker compose ps              # check service health
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
-- **MCP Annotations**: All 9 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
+- **MCP Annotations**: All 10 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
 - **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, summaries). Full mode via `compact: false`.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
@@ -126,7 +126,7 @@ backend/src/
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # rawQdrant + ensureCollection (no chatModel/embeddingModel — use lib/model-provider.ts)
-  mastra/tools/          # 9 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, etc.)
+  mastra/tools/          # 10 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, get-impact-analysis, etc.)
   mastra/workflows/      # nightly-review.ts (multi-step orchestration via AI SDK generateText)
   jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
   middleware/rate-limiter.ts  # global, auth, chat rate limiters
@@ -135,7 +135,7 @@ backend/src/
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
   routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
-  mcp.ts                 # MCP stdio server (9 tools via @modelcontextprotocol/sdk)
+  mcp.ts                 # MCP stdio server (10 tools via @modelcontextprotocol/sdk)
 ```
 
 ## Gotchas
@@ -165,8 +165,8 @@ backend/src/
 - **Full reindex required after v1.1 upgrade**: The code-chunks collection schema changed (named vectors + new metadata fields). The indexer automatically drops and recreates it.
 - **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
 - **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
-- **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses `StreamableHTTPServerTransport` from `@modelcontextprotocol/sdk`.
-- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both expose the same 9 tools.
+- **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses `SSEServerTransport` from `@modelcontextprotocol/sdk`.
+- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both use `SSEServerTransport` (HTTP/SSE) and `StdioServerTransport` (stdio) respectively, and call the shared `registerTools(server)` from `src/mcp-tools.ts`. Both expose the same 10 tools.
 - **AI SDK v6 tools**: Tools use `inputSchema:` (not `parameters:`). Import `z` from `"zod"` (v3), not `"zod/v4"` — AI SDK v6's `FlexibleSchema` requires Zod v3 types. Each tool file exports both `executeFoo()` (standalone async fn) and `fooTool` (AI SDK tool object).
 - **`stopWhen: stepCountIs(N)`**: AI SDK v6 replaced `maxSteps: N` with `stopWhen: stepCountIs(N)` imported from `"ai"`.
 

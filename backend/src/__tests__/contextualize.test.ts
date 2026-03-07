@@ -2,9 +2,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../mastra/infra.js", () => ({
-  chatModel: {},
-  embeddingModel: {},
+vi.mock("../lib/model-provider.js", () => ({
+  getChatModel: () => ({}),
+  getEmbeddingModel: () => ({}),
 }));
 
 vi.mock("../config/logger.js", () => ({

@@ -7,7 +7,7 @@
 import { generateText } from "ai";
 
 import { logger } from "../config/logger.js";
-import { chatModel } from "../mastra/infra.js";
+import { getChatModel } from "../lib/model-provider.js";
 
 /** Truncate file content to avoid cost explosion on large files. */
 const MAX_FILE_CHARS = 8000;
@@ -45,7 +45,7 @@ export async function contextualizeChunk(
 
   try {
     const { text } = await generateText({
-      model: chatModel,
+      model: getChatModel(),
       prompt,
       maxOutputTokens: 150,
       temperature: 0,

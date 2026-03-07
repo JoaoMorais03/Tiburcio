@@ -1,10 +1,10 @@
 // indexer/embed.ts — Embedding utilities (provider-agnostic via AI SDK).
-// Model configured in mastra/infra.ts based on MODEL_PROVIDER.
+// Model configured via MODEL_PROVIDER env var in lib/model-provider.ts.
 
 import { createHash } from "node:crypto";
 import { embed, embedMany } from "ai";
 
-import { embeddingModel } from "../mastra/infra.js";
+import { getEmbeddingModel } from "../lib/model-provider.js";
 import type { ASTChunk } from "./ast-chunker.js";
 import { redactSecrets } from "./redact.js";
 
@@ -44,7 +44,7 @@ export function contentHash(text: string): string {
 export async function embedText(text: string): Promise<number[]> {
   const redacted = redactSecrets(text);
   const { embedding } = await embed({
-    model: embeddingModel,
+    model: getEmbeddingModel(),
     value: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });
@@ -54,7 +54,7 @@ export async function embedText(text: string): Promise<number[]> {
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   const redacted = texts.map((text) => redactSecrets(text));
   const { embeddings } = await embedMany({
-    model: embeddingModel,
+    model: getEmbeddingModel(),
     values: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });

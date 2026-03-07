@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.1.0] — 2026-03-05
+
+### Added
+- **Neo4j graph layer** (optional): `getImpactAnalysis` tool traces dependency impact (file, class, table targets) using graph traversal. Enable with `NEO4J_URI` env var.
+- **`getImpactAnalysis`** MCP tool: 10th tool in the suite. Requires Neo4j; returns `available: false` gracefully when not configured.
+- **`DISABLE_REGISTRATION`** env var: Set to `true` to prevent new user registrations after initial team setup.
+
+### Changed
+- **Removed Mastra**: Replaced Mastra AI framework with direct Vercel AI SDK v6 (`generateText`, `streamText`, `tool`) + MCP TypeScript SDK (`@modelcontextprotocol/sdk`). No breaking changes to MCP tool API.
+- **RAG hardening**: Contextual retrieval (LLM context per chunk), BM25 sparse vectors, hybrid search with Qdrant RRF fusion, header chunk linkage, payload truncation.
+- **Provider model**: `MODEL_PROVIDER=openai-compatible` replaces the old `openrouter`-specific configuration. Works with vLLM, OpenRouter, LM Studio, and any OpenAI-compatible endpoint.
+- **Shared tool registration**: Both MCP transports (stdio + HTTP/SSE) now use a single `registerTools()` function from `src/mcp-tools.ts` — no description drift.
+- **Timing-safe auth**: MCP Bearer token comparison uses `crypto.timingSafeEqual`.
+
+### Fixed
+- Zero-vector search in `getNightlySummary`/`getChangeSummary` replaced with proper `scroll()` + date filter.
+- Wrong system prompt for test suggestion generation (was using code review prompt).
+- Sequential incremental reindex in nightly pipeline now uses `p-limit(3)` parallelism.
+- `getImpactAnalysis` with `targetType: "function"` now returns a clear "not yet supported" message instead of silent empty results.
+
+---
+
 ## [2.0.0] - 2026-02-28
 
 Strategic pivot from "onboarding chatbot" to **Developer Intelligence MCP** — a codebase intelligence layer that makes Claude Code better at working with your specific codebase.

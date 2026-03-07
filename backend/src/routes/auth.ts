@@ -6,7 +6,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { deleteCookie, setCookie } from "hono/cookie";
 import { sign } from "hono/jwt";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
@@ -65,6 +65,10 @@ async function issueTokens(c: Context, userId: string, username: string): Promis
 }
 
 authRouter.post("/register", async (c) => {
+  if (env.DISABLE_REGISTRATION) {
+    return c.json({ error: "Registration is disabled on this server." }, 403);
+  }
+
   const parsed = authBody.safeParse(await c.req.json());
   if (!parsed.success) {
     return c.json({ error: parsed.error.issues[0].message }, 400);

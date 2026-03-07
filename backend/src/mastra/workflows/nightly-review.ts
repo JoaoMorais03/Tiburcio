@@ -6,6 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { generateText, stepCountIs } from "ai";
+import pLimit from "p-limit";
 
 import { getRepoConfigs } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
@@ -82,6 +83,9 @@ Example:
   }
 ]`;
 
+const TEST_SUGGESTION_SYSTEM_PROMPT =
+  "You are a test scaffold generator. Output only executable test code — no explanation, no JSON, no markdown fences. Use Vitest for TypeScript/Vue files, JUnit for Java files. Keep it concise and practical.";
+
 // --- Step 1: Incremental re-index ---
 
 async function incrementalReindex(): Promise<{ filesIndexed: number; chunksIndexed: number }> {
@@ -143,91 +147,97 @@ async function incrementalReindex(): Promise<{ filesIndexed: number; chunksIndex
       }
     }
 
-    for (const relPath of changedFiles) {
-      const fullPath = join(repo.path, relPath);
-      try {
-        // Purge stale vectors before re-upserting
-        try {
-          await rawQdrant.delete(COLLECTION, {
-            wait: true,
-            filter: {
-              must: [
-                { key: "repo", match: { value: repo.name } },
-                { key: "filePath", match: { value: relPath } },
-              ],
-            },
-          });
-        } catch {
-          /* safe to ignore */
-        }
+    const limit = pLimit(3);
+    let repoChunks = 0;
+    await Promise.all(
+      changedFiles.map((relPath) =>
+        limit(async () => {
+          const fullPath = join(repo.path, relPath);
+          try {
+            // Purge stale vectors before re-upserting
+            try {
+              await rawQdrant.delete(COLLECTION, {
+                wait: true,
+                filter: {
+                  must: [
+                    { key: "repo", match: { value: repo.name } },
+                    { key: "filePath", match: { value: relPath } },
+                  ],
+                },
+              });
+            } catch {
+              /* safe to ignore */
+            }
 
-        const content = await readFile(fullPath, "utf-8");
-        const chunks = chunkFile(content, relPath);
-        if (chunks.length === 0) continue;
+            const content = await readFile(fullPath, "utf-8");
+            const chunks = chunkFile(content, relPath);
+            if (chunks.length === 0) return;
 
-        // Link each chunk to its file's header chunk
-        const headerChunk = chunks.find((c) => c.chunkType === "header");
-        const headerChunkUUID = headerChunk
-          ? toUUID(`${repo.name}:${relPath}:${headerChunk.startLine}`)
-          : null;
-        for (const chunk of chunks) {
-          chunk.headerChunkId = chunk.chunkType === "header" ? null : headerChunkUUID;
-        }
+            // Link each chunk to its file's header chunk
+            const headerChunk = chunks.find((c) => c.chunkType === "header");
+            const headerChunkUUID = headerChunk
+              ? toUUID(`${repo.name}:${relPath}:${headerChunk.startLine}`)
+              : null;
+            for (const chunk of chunks) {
+              chunk.headerChunkId = chunk.chunkType === "header" ? null : headerChunkUUID;
+            }
 
-        // Generate contextual descriptions
-        let contexts: string[];
-        try {
-          contexts = await contextualizeChunks(content, chunks, relPath, chunks[0].language);
-        } catch {
-          contexts = chunks.map(() => "");
-        }
+            // Generate contextual descriptions
+            let contexts: string[];
+            try {
+              contexts = await contextualizeChunks(content, chunks, relPath, chunks[0].language);
+            } catch {
+              contexts = chunks.map(() => "");
+            }
 
-        // Prepend context to embedding text
-        const textsToEmbed = chunks.map((c, idx) =>
-          enrichChunkForEmbedding(c, contexts[idx] || undefined),
-        );
-        const embeddings = await embedTexts(textsToEmbed);
+            // Prepend context to embedding text — compute once, reuse for both embeddings and contentHash
+            const enrichedTexts = chunks.map((c, idx) =>
+              enrichChunkForEmbedding(c, contexts[idx] || undefined),
+            );
+            const embeddings = await embedTexts(enrichedTexts);
 
-        // Upsert with both dense + sparse vectors
-        const points = chunks.map((c, idx) => {
-          const sparseText = [c.content, c.symbolName, c.parentSymbol, c.annotations.join(" ")]
-            .filter(Boolean)
-            .join(" ");
-          return {
-            id: toUUID(`${repo.name}:${c.filePath}:${c.startLine}`),
-            vector: {
-              dense: embeddings[idx],
-              bm25: textToSparse(sparseText),
-            },
-            payload: {
-              repo: repo.name,
-              text: redactSecrets(c.content),
-              context: contexts[idx],
-              filePath: c.filePath,
-              language: c.language,
-              layer: c.layer,
-              startLine: c.startLine,
-              endLine: c.endLine,
-              symbolName: c.symbolName,
-              parentSymbol: c.parentSymbol,
-              chunkType: c.chunkType,
-              annotations: c.annotations,
-              chunkIndex: c.chunkIndex,
-              totalChunks: c.totalChunks,
-              headerChunkId: c.headerChunkId,
-              contentHash: contentHash(enrichChunkForEmbedding(c, contexts[idx] || undefined)),
-              indexedAt: new Date().toISOString(),
-            },
-          };
-        });
+            // Upsert with both dense + sparse vectors
+            const points = chunks.map((c, idx) => {
+              const sparseText = [c.content, c.symbolName, c.parentSymbol, c.annotations.join(" ")]
+                .filter(Boolean)
+                .join(" ");
+              return {
+                id: toUUID(`${repo.name}:${c.filePath}:${c.startLine}`),
+                vector: {
+                  dense: embeddings[idx],
+                  bm25: textToSparse(sparseText),
+                },
+                payload: {
+                  repo: repo.name,
+                  text: redactSecrets(c.content),
+                  context: contexts[idx],
+                  filePath: c.filePath,
+                  language: c.language,
+                  layer: c.layer,
+                  startLine: c.startLine,
+                  endLine: c.endLine,
+                  symbolName: c.symbolName,
+                  parentSymbol: c.parentSymbol,
+                  chunkType: c.chunkType,
+                  annotations: c.annotations,
+                  chunkIndex: c.chunkIndex,
+                  totalChunks: c.totalChunks,
+                  headerChunkId: c.headerChunkId,
+                  contentHash: contentHash(enrichedTexts[idx]),
+                  indexedAt: new Date().toISOString(),
+                },
+              };
+            });
 
-        await rawQdrant.upsert(COLLECTION, { wait: true, points });
-        totalChunks += chunks.length;
-      } catch {
-        // File was deleted or unreadable — vectors already cleaned up above
-      }
-    }
-
+            await rawQdrant.upsert(COLLECTION, { wait: true, points });
+            repoChunks += chunks.length;
+          } catch {
+            // File was deleted or unreadable — vectors already cleaned up above
+          }
+        }),
+      ),
+    );
+    totalChunks += repoChunks;
     totalFiles += changedFiles.length;
     const currentSha = await getHeadSha(repo.path);
     await redis.set(redisKey, currentSha);
@@ -246,12 +256,12 @@ async function incrementalReindex(): Promise<{ filesIndexed: number; chunksIndex
 async function codeReview(): Promise<{
   reviewNotes: number;
   commits: number;
-  commitsJson: string;
+  allCommits: Awaited<ReturnType<typeof getMergeCommits>>;
 }> {
   const repos = getRepoConfigs();
   if (repos.length === 0) {
     logger.warn("CODEBASE_REPOS not set, skipping code review");
-    return { reviewNotes: 0, commits: 0, commitsJson: "[]" };
+    return { reviewNotes: 0, commits: 0, allCommits: [] };
   }
 
   const allNotes: ReviewNote[] = [];
@@ -347,20 +357,20 @@ ${diffSummary}`;
   return {
     reviewNotes: allNotes.length,
     commits: allCommits.length,
-    commitsJson: JSON.stringify(allCommits),
+    allCommits,
   };
 }
 
 // --- Step 3: Test suggestions ---
 
-async function generateTestSuggestions(commitsJson: string): Promise<{ suggestions: number }> {
+async function generateTestSuggestions(
+  commits: Awaited<ReturnType<typeof getMergeCommits>>,
+): Promise<{ suggestions: number }> {
   const repos = getRepoConfigs();
   if (repos.length === 0) {
     logger.warn("CODEBASE_REPOS not set, skipping test suggestions");
     return { suggestions: 0 };
   }
-
-  const commits = JSON.parse(commitsJson) as Awaited<ReturnType<typeof getMergeCommits>>;
 
   if (commits.length === 0) return { suggestions: 0 };
 
@@ -407,7 +417,7 @@ Respond with ONLY a test scaffold — the actual test code a developer would use
       try {
         const { text } = await generateText({
           model: getChatModel(),
-          system: CODE_REVIEW_SYSTEM_PROMPT,
+          system: TEST_SUGGESTION_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
           abortSignal: AbortSignal.timeout(120_000),
         });
@@ -473,8 +483,8 @@ async function buildGraphStep(): Promise<void> {
 
 export async function runNightlyReview(): Promise<{ suggestions: number }> {
   await incrementalReindex();
-  const { commitsJson } = await codeReview();
-  const { suggestions } = await generateTestSuggestions(commitsJson);
+  const { allCommits } = await codeReview();
+  const { suggestions } = await generateTestSuggestions(allCommits);
   await buildGraphStep();
   return { suggestions };
 }

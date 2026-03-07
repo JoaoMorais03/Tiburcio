@@ -8,8 +8,6 @@ vi.mock("../indexer/embed.js", () => ({
 
 vi.mock("../mastra/infra.js", () => ({
   rawQdrant: { search: vi.fn(), query: vi.fn(), retrieve: vi.fn() },
-  chatModel: {},
-  embeddingModel: {},
 }));
 
 vi.mock("../indexer/bm25.js", () => ({

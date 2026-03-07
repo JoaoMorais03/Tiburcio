@@ -4,7 +4,6 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
@@ -16,9 +15,14 @@ interface SearchResult {
   payload?: Record<string, unknown> | null;
 }
 
-function parseSince(since: string): string {
+function parseSince(since: string): string | null {
   const match = since.match(/^(\d+)([dwm])$/);
-  if (!match) return since; // Assume ISO date
+  if (!match) {
+    // Validate ISO date
+    const parsed = new Date(since);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return since;
+  }
 
   const amount = Number.parseInt(match[1], 10);
   const unit = match[2];
@@ -75,17 +79,24 @@ function buildSummary(
 export async function executeGetChangeSummary(since = "1d", area?: string) {
   const sinceDate = parseSince(since);
 
+  if (sinceDate === null) {
+    return {
+      results: [],
+      summary: `Invalid date format: "${since}". Use ISO date (e.g. "2026-01-15") or relative format ("1d", "7d", "2w", "1m").`,
+      changes: [],
+    };
+  }
+
   try {
-    const dims = env.EMBEDDING_DIMENSIONS as number;
-    const zeroVec = new Array(dims).fill(0);
-    const allResults = await rawQdrant.search(COLLECTION, {
-      vector: zeroVec,
+    const filter: Record<string, unknown> = {
+      must: [{ key: "date", range: { gte: sinceDate } }],
+    };
+    const scrollResult = await rawQdrant.scroll(COLLECTION, {
+      filter,
       limit: 50,
       with_payload: true,
     });
-    const results = allResults.filter((r) => {
-      const date = (r.payload?.date as string) ?? "";
-      if (date < sinceDate) return false;
+    const results = scrollResult.points.filter((r) => {
       if (area) {
         const filePath = (r.payload?.filePath as string) ?? "";
         return filePath.includes(area);
