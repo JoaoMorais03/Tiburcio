@@ -22,13 +22,6 @@ function countBySeverity(results: SearchResult[]) {
   return counts;
 }
 
-function _filterRecent(results: SearchResult[], cutoffStr: string) {
-  return results.filter((r) => {
-    const date = (r.payload?.date as string) ?? "";
-    return date >= cutoffStr;
-  });
-}
-
 function extractIssues(recentReviews: SearchResult[]) {
   const warningFiles = new Set<string>();
   const criticalItems: Array<{ filePath: string; summary: string; category: string }> = [];
