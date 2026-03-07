@@ -13,16 +13,12 @@ import { extractGraph, type GraphData } from "./extractor.js";
 const BATCH_SIZE = 500;
 const FLUSH_BATCH = 100;
 const SOURCE_EXTENSIONS = new Set([".java", ".ts", ".tsx", ".vue"]);
+// Dotfiles (names starting with ".") are already excluded by the startsWith check in findSourceFiles.
 const SKIP_DIRS = new Set([
   "node_modules",
-  ".git",
   "target",
   "build",
   "dist",
-  ".idea",
-  ".mvn",
-  ".vscode",
-  ".claude",
   "cicd",
   "docs",
   "test",

@@ -1,7 +1,7 @@
 // Tests for request body validation schemas used in auth and chat routes.
 
 import { describe, expect, it } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 // Auth schema (mirrors routes/auth.ts)
 const authBody = z.object({

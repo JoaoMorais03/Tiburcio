@@ -7,11 +7,7 @@ import { z } from "zod";
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
-
-interface SearchResult {
-  score?: number;
-  payload?: Record<string, unknown> | null;
-}
+import type { SearchResult } from "./types.js";
 
 function countBySeverity(results: SearchResult[]) {
   const counts = { info: 0, warning: 0, critical: 0 };

@@ -6,7 +6,7 @@ import neo4j, { type Driver, type Session } from "neo4j-driver";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
 
-let _driver: Driver | null = null;
+let driver: Driver | null = null;
 
 export function isGraphAvailable(): boolean {
   return !!env.NEO4J_URI;
@@ -16,8 +16,8 @@ export function getGraphDriver(): Driver {
   if (!isGraphAvailable()) {
     throw new Error("Neo4j not configured. Set NEO4J_URI to enable graph features.");
   }
-  if (!_driver) {
-    _driver = neo4j.driver(
+  if (!driver) {
+    driver = neo4j.driver(
       env.NEO4J_URI as string,
       neo4j.auth.basic("neo4j", env.NEO4J_PASSWORD as string),
       {
@@ -29,13 +29,13 @@ export function getGraphDriver(): Driver {
     );
     logger.info({ uri: env.NEO4J_URI }, "Neo4j driver initialized");
   }
-  return _driver;
+  return driver;
 }
 
 export async function closeGraphDriver(): Promise<void> {
-  if (_driver) {
-    await _driver.close();
-    _driver = null;
+  if (driver) {
+    await driver.close();
+    driver = null;
     logger.info("Neo4j driver closed");
   }
 }

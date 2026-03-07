@@ -7,13 +7,9 @@ import { z } from "zod";
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
 import { truncate } from "./truncate.js";
+import type { SearchResult } from "./types.js";
 
 const COLLECTION = "reviews";
-
-interface SearchResult {
-  score?: number;
-  payload?: Record<string, unknown> | null;
-}
 
 function parseSince(since: string): string | null {
   const match = since.match(/^(\d+)([dwm])$/);
