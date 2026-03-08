@@ -91,7 +91,9 @@ export type Env = z.infer<typeof envSchema>;
 
 const parsed = envSchema.parse(process.env) as Env;
 
-// Auto-default EMBEDDING_DIMENSIONS based on provider when not explicitly set
+// Auto-default EMBEDDING_DIMENSIONS based on provider when not explicitly set.
+// Ollama default: 768 (nomic-embed-text). OpenAI-compatible default: 4096 (qwen3-embedding-8b).
+// Override with EMBEDDING_DIMENSIONS env var if using a different embedding model.
 if (parsed.EMBEDDING_DIMENSIONS == null) {
   parsed.EMBEDDING_DIMENSIONS = parsed.MODEL_PROVIDER === "ollama" ? 768 : 4096;
 }

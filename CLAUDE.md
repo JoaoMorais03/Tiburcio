@@ -49,8 +49,8 @@ docker compose ps              # check service health
 
 - **Backend**: Hono HTTP server + Vercel AI SDK v6 + MCP TypeScript SDK + BullMQ jobs
 - **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
-- **LLM**: Provider-agnostic via `lib/model-provider.ts` — Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter) via `MODEL_PROVIDER` env var
-- **Embeddings**: Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible (`text-embedding-*`, configurable dims) — auto-defaults based on provider
+- **LLM**: Provider-agnostic via `lib/model-provider.ts` — Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter) via `MODEL_PROVIDER` env var. Recommended OpenRouter model: `qwen/qwen3-8b` (open source, zero retention)
+- **Embeddings**: Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible via `INFERENCE_EMBEDDING_MODEL` env var — auto-defaults based on provider. Recommended OpenRouter model: `qwen/qwen3-embedding-8b` (4096 dims, MTEB-Code 80.68)
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
@@ -149,9 +149,10 @@ backend/src/
 - **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_REPOS` later, restart the backend and `code-chunks` will auto-index.
 - **`.tibignore`**: Place a `.tibignore` file in each repo root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
 - **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending to inference APIs or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
-- **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:text-embedding-3-small`). Re-indexing is triggered automatically.
-- **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. When using Ollama, no external API keys are needed.
-- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama) or 4096 (openai-compatible) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
+- **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:qwen/qwen3-embedding-8b`). Re-indexing is triggered automatically.
+- **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. `INFERENCE_EMBEDDING_MODEL` sets the embedding model (e.g., `qwen/qwen3-embedding-8b`). When using Ollama, no external API keys are needed.
+- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama/nomic-embed-text) or 4096 (openai-compatible/qwen3-embedding-8b) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
+- **Langfuse is optional**: Docker Compose profile `observability`. Start with `docker compose --profile observability up -d`. Backend works without Langfuse env vars — all three are `z.string().optional()`.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
 - **BullMQ lock duration**: Worker uses `lockDuration: 300_000` (5 min) and `lockRenewTime: 60_000` (1 min). Default 30s lock causes stalled-job detection during long indexing runs.

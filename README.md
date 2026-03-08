@@ -145,17 +145,24 @@ docker exec ollama ollama pull qwen3:8b
 docker exec ollama ollama pull nomic-embed-text
 ```
 
-### Option B: OpenAI-Compatible Endpoint (vLLM, OpenRouter, etc.)
+### Option B: OpenRouter (no local models, recommended for teams)
 
 ```bash
 git clone https://github.com/JoaoMorais03/tiburcio.git
 cd tiburcio
 cp .env.example .env
-# Edit .env — set MODEL_PROVIDER=openai-compatible, INFERENCE_BASE_URL, INFERENCE_MODEL, INFERENCE_API_KEY
+# Edit .env — fill in your INFERENCE_API_KEY from https://openrouter.ai
+# Defaults: qwen/qwen3-8b (LLM) + qwen/qwen3-embedding-8b (embeddings)
+# MCP-only (no frontend):
+docker compose up db redis qdrant backend -d
+# Full stack (with chat UI):
 docker compose up -d
 ```
 
-Wait for all services to become healthy (`docker compose ps`), then open **http://localhost:5174** for the chat UI. Database migrations run automatically on first boot.
+Wait for all services to become healthy (`docker compose ps`). MCP tools are available immediately. For the chat UI, open **http://localhost:5174**. Database migrations run automatically on first boot.
+
+> **Observability (optional):** To track tool call counts, token usage, and cost per model, start Langfuse:
+> `docker compose --profile observability up -d` — then open http://localhost:3001.
 
 ### Connect Claude Code
 
