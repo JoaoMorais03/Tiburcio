@@ -8,8 +8,6 @@ COPY node-certs.pe[m] /usr/local/share/ca-certificates/
 RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
     cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
     fi
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/node-certs.pem
-
 RUN corepack enable && corepack prepare pnpm@10.30.1 --activate
 
 # Copy workspace root files

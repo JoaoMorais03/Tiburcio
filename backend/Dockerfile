@@ -9,8 +9,6 @@ COPY node-certs.pe[m] /usr/local/share/ca-certificates/
 RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
     cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
     fi
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/node-certs.pem
-
 # Build tools for tree-sitter native bindings (only in build stage, not final image)
 RUN apk add --no-cache python3 make g++ && \
     corepack enable && corepack prepare pnpm@10.30.1 --activate
@@ -60,5 +58,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD wget -qO- http://localhost:3000/api/health || exit 1
 
 ENV NODE_ENV=production
-ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/node-certs.pem
 CMD ["node", "dist/server.js"]
