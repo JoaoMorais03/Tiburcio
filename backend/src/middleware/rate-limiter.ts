@@ -61,3 +61,11 @@ export const chatLimiter = rateLimiter({
   store: new RedisStore({ client: redisClient, prefix: "rl:chat:" }),
   standardHeaders: "draft-7",
 });
+
+export const mcpLimiter = rateLimiter({
+  windowMs: 60 * 1000,
+  limit: 300,
+  keyGenerator: (c) => clientIp(c),
+  store: new RedisStore({ client: redisClient, prefix: "rl:mcp:" }),
+  standardHeaders: "draft-7",
+});

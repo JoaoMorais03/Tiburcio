@@ -1,9 +1,10 @@
 // tools/search-code.ts — Search the indexed codebase via Qdrant.
 // Pipeline: embed → hybrid search (dense + BM25 RRF) → batch header expansion.
 
-import { createTool } from "@mastra/core/tools";
-import { z } from "zod/v4";
+import { tool } from "ai";
+import { z } from "zod";
 
+import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { embedText } from "../../indexer/embed.js";
@@ -18,8 +19,21 @@ interface QdrantPoint {
   payload?: Record<string, unknown>;
 }
 
+function mapPointToCompact(p: QdrantPoint) {
+  const m = (p.payload ?? {}) as Record<string, unknown>;
+  const text = (m.text as string) ?? "";
+  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
+  return {
+    filePath: (m.filePath as string) ?? "unknown",
+    symbolName: (m.symbolName as string) ?? null,
+    lineRange: `${(m.startLine as number) ?? 0}-${(m.endLine as number) ?? 0}`,
+    summary: truncate(firstLine, 120),
+    score: p.score ?? 0,
+  };
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: flat ?? chains for metadata fallbacks
-function mapPointToResult(p: QdrantPoint, headerMap: Map<string, string>) {
+function mapPointToFull(p: QdrantPoint, headerMap: Map<string, string>) {
   const m = (p.payload ?? {}) as Record<string, unknown>;
   const headerChunkId = m.headerChunkId as string | null;
   const needsHeader = headerChunkId && m.chunkType !== "header";
@@ -67,11 +81,105 @@ async function fetchHeaders(points: QdrantPoint[]): Promise<Map<string, string>>
   return headerMap;
 }
 
-export const searchCode = createTool({
-  id: "searchCode",
-  mcp: {
-    annotations: { readOnlyHint: true, openWorldHint: false },
-  },
+export async function executeSearchCode(
+  query: string,
+  repo?: string,
+  language?: string,
+  layer?: string,
+  compact = true,
+) {
+  const t0 = Date.now();
+
+  const conditions: Array<{ key: string; match: { value: string } }> = [];
+  if (repo) conditions.push({ key: "repo", match: { value: repo } });
+  if (language) conditions.push({ key: "language", match: { value: language } });
+  if (layer) conditions.push({ key: "layer", match: { value: layer } });
+  const filter = conditions.length > 0 ? { must: conditions } : undefined;
+
+  try {
+    const textToEmbed = [language, layer, query].filter(Boolean).join(" ");
+    const denseVec = await embedText(textToEmbed);
+    const tEmbed = Date.now();
+
+    const resultLimit = compact ? 3 : 8;
+
+    // Hybrid search: dense + BM25 prefetch with RRF fusion (Qdrant handles ranking)
+    const rawResults = await rawQdrant.query(COLLECTION, {
+      prefetch: [
+        { query: denseVec, using: "dense", limit: 20, filter },
+        { query: textToSparse(textToEmbed), using: "bm25", limit: 20, filter },
+      ],
+      query: { fusion: "rrf" },
+      limit: resultLimit,
+      with_payload: true,
+    });
+    const tSearch = Date.now();
+
+    const points = rawResults.points as QdrantPoint[];
+
+    if (points.length === 0) {
+      logger.info(
+        { query, embed: tEmbed - t0, search: tSearch - tEmbed },
+        "searchCode: no results",
+      );
+      return {
+        results: [],
+        message:
+          "No matching code found. Suggestions: " +
+          (language || layer ? "try removing the language/layer filter. " : "") +
+          "Try searchStandards for conventions or getPattern for code templates.",
+      };
+    }
+
+    const codeThreshold = env.RETRIEVAL_CODE_SCORE_THRESHOLD as number;
+    const topCodeScore = points[0]?.score ?? 0;
+    if (topCodeScore < codeThreshold) {
+      logger.info(
+        { topCodeScore, codeThreshold },
+        "searchCode: results below confidence threshold",
+      );
+      return {
+        results: [],
+        message: `No high-confidence code found (best score: ${topCodeScore.toFixed(4)}, threshold: ${codeThreshold}). Try rephrasing the query or removing language/layer filters.`,
+      };
+    }
+
+    if (compact) {
+      const results = points.map(mapPointToCompact);
+      logger.info(
+        { query, embed: tEmbed - t0, search: tSearch - tEmbed, total: Date.now() - t0 },
+        "searchCode timing (ms)",
+      );
+      return { results };
+    }
+
+    const headerMap = await fetchHeaders(points);
+    const tHeaders = Date.now();
+
+    const results = points.map((p) => mapPointToFull(p, headerMap));
+
+    logger.info(
+      {
+        query,
+        embed: tEmbed - t0,
+        search: tSearch - tEmbed,
+        headers: tHeaders - tSearch,
+        total: Date.now() - t0,
+      },
+      "searchCode timing (ms)",
+    );
+
+    return { results };
+  } catch (err) {
+    logger.error({ err, collection: COLLECTION }, "Tool query failed");
+    return {
+      results: [],
+      message: "Code collection not yet indexed. Run indexing first.",
+    };
+  }
+}
+
+export const searchCodeTool = tool({
   description:
     "Search real production code from the indexed codebase using hybrid search (semantic + keyword matching). " +
     "Returns enriched results with symbolName, classContext, annotations, and exact line ranges. " +
@@ -117,74 +225,14 @@ export const searchCode = createTool({
       ])
       .optional()
       .describe("Filter by architectural layer. For conventions, use searchStandards instead."),
+    compact: z
+      .boolean()
+      .default(true)
+      .describe(
+        "When true (default), returns minimal metadata (filePath, symbolName, lineRange, summary). " +
+          "When false, returns full code chunks with classContext. Use compact for discovery, full for deep inspection.",
+      ),
   }),
-
-  execute: async (inputData) => {
-    const { query, repo, language, layer } = inputData;
-    const t0 = Date.now();
-
-    const conditions: Array<{ key: string; match: { value: string } }> = [];
-    if (repo) conditions.push({ key: "repo", match: { value: repo } });
-    if (language) conditions.push({ key: "language", match: { value: language } });
-    if (layer) conditions.push({ key: "layer", match: { value: layer } });
-    const filter = conditions.length > 0 ? { must: conditions } : undefined;
-
-    try {
-      const textToEmbed = [language, layer, query].filter(Boolean).join(" ");
-      const denseVec = await embedText(textToEmbed);
-      const tEmbed = Date.now();
-
-      // Hybrid search: dense + BM25 prefetch with RRF fusion (Qdrant handles ranking)
-      const rawResults = await rawQdrant.query(COLLECTION, {
-        prefetch: [
-          { query: denseVec, using: "dense", limit: 20, filter },
-          { query: textToSparse(textToEmbed), using: "bm25", limit: 20, filter },
-        ],
-        query: { fusion: "rrf" },
-        limit: 8,
-        with_payload: true,
-      });
-      const tSearch = Date.now();
-
-      const points = rawResults.points as QdrantPoint[];
-
-      if (points.length === 0) {
-        logger.info(
-          { query, embed: tEmbed - t0, search: tSearch - tEmbed },
-          "searchCode: no results",
-        );
-        return {
-          results: [],
-          message:
-            "No matching code found. Suggestions: " +
-            (language || layer ? "try removing the language/layer filter. " : "") +
-            "Try searchStandards for conventions or getPattern for code templates.",
-        };
-      }
-
-      const headerMap = await fetchHeaders(points);
-      const tHeaders = Date.now();
-
-      const results = points.map((p) => mapPointToResult(p, headerMap));
-
-      logger.info(
-        {
-          query,
-          embed: tEmbed - t0,
-          search: tSearch - tEmbed,
-          headers: tHeaders - tSearch,
-          total: Date.now() - t0,
-        },
-        "searchCode timing (ms)",
-      );
-
-      return { results };
-    } catch (err) {
-      logger.error({ err, collection: COLLECTION }, "Tool query failed");
-      return {
-        results: [],
-        message: "Code collection not yet indexed. Run indexing first.",
-      };
-    }
-  },
+  execute: ({ query, repo, language, layer, compact }) =>
+    executeSearchCode(query, repo, language, layer, compact),
 });

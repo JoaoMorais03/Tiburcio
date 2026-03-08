@@ -147,7 +147,57 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  # Optional: Neo4j graph layer for impact analysis (start with --profile graph)
+  # Usage: docker compose --profile graph up -d
+  # Then set NEO4J_URI=bolt://localhost:7687 in .env
+  neo4j:
+    image: neo4j:5-community
+    profiles: ["graph"]
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-tiburcio}
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    volumes:
+      - neo4j_data:/data
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Optional: local LLM inference via Ollama (start with --profile ollama)
+  # Usage: docker compose --profile ollama up -d
+  ollama:
+    image: ollama/ollama
+    profiles: ["ollama"]
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:11434/api/tags || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redis_data:
   qdrant_storage:
+  neo4j_data:
+  ollama_data:

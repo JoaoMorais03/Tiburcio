@@ -2,15 +2,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../mastra/infra.js", () => ({
-  openrouter: { chat: vi.fn(() => ({})) },
-}));
-
-vi.mock("../config/env.js", () => ({
-  env: {
-    OPENROUTER_MODEL: "test-model",
-    OPENROUTER_PROVIDER: "test-provider",
-  },
+vi.mock("../lib/model-provider.js", () => ({
+  getChatModel: () => ({}),
+  getEmbeddingModel: () => ({}),
 }));
 
 vi.mock("../config/logger.js", () => ({

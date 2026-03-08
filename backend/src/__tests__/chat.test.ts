@@ -16,20 +16,55 @@ vi.mock("../helpers/conversation.js", () => ({
   resolveConversation: vi.fn(),
 }));
 
-vi.mock("../mastra/agents/chat-agent.js", () => ({
-  chatAgent: {
-    stream: vi.fn(),
-  },
+vi.mock("ai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("ai")>();
+  return {
+    ...actual,
+    streamText: vi.fn(),
+  };
+});
+
+vi.mock("../lib/model-provider.js", () => ({
+  getChatModel: vi.fn(() => ({})),
+}));
+
+// Stub all 9 tool modules so they don't pull in Qdrant/embed deps
+vi.mock("../mastra/tools/search-standards.js", () => ({
+  searchStandardsTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-pattern.js", () => ({
+  getPatternTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/search-code.js", () => ({
+  searchCodeTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-architecture.js", () => ({
+  getArchitectureTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/search-schemas.js", () => ({
+  searchSchemasTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/search-reviews.js", () => ({
+  searchReviewsTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-test-suggestions.js", () => ({
+  getTestSuggestionsTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-nightly-summary.js", () => ({
+  getNightlySummaryTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-change-summary.js", () => ({
+  getChangeSummaryTool: { description: "stub", parameters: {}, execute: vi.fn() },
 }));
 
 vi.mock("../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+import { streamText } from "ai";
 import { Hono } from "hono";
 import { db } from "../db/connection.js";
 import { resolveConversation } from "../helpers/conversation.js";
-import { chatAgent } from "../mastra/agents/chat-agent.js";
 
 async function createApp() {
   const { default: chatRouter } = await import("../routes/chat.js");
@@ -70,6 +105,23 @@ function parseSSE(text: string): Array<{ event: string; data: string }> {
   return events;
 }
 
+/** Create an async iterable that yields the given chunks. */
+function mockTextStream(chunks: string[]) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const chunk of chunks) yield chunk;
+    },
+  };
+}
+
+function mockDbSelect(rows: unknown[] = []) {
+  const mockLimit = vi.fn().mockResolvedValue(rows);
+  const mockOrderBy = vi.fn().mockReturnValue({ limit: mockLimit });
+  const mockWhere = vi.fn().mockReturnValue({ orderBy: mockOrderBy });
+  const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
+  vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
+}
+
 // Tracks db.insert calls
 let insertCalls: { table: unknown; values: unknown }[] = [];
 
@@ -83,7 +135,7 @@ function mockInsertTracked(returningValue: unknown[] = []) {
           then: (resolve: (v: unknown) => void) => resolve(undefined),
         };
       }),
-    } as any;
+    } as never;
   });
 }
 
@@ -92,16 +144,7 @@ function mockUpdate() {
     set: vi.fn().mockReturnValue({
       where: vi.fn().mockResolvedValue(undefined),
     }),
-  } as any);
-}
-
-/** Create an async iterable that yields the given chunks. */
-function mockTextStream(chunks: string[]) {
-  return {
-    async *[Symbol.asyncIterator]() {
-      for (const chunk of chunks) yield chunk;
-    },
-  };
+  } as never);
 }
 
 describe("chat routes", () => {
@@ -121,7 +164,11 @@ describe("chat routes", () => {
       };
 
       vi.mocked(resolveConversation).mockResolvedValue("conv-123");
-      // First insert (user msg) returns nothing, second (assistant msg) returns the message
+
+      // Mock history select to return empty
+      mockDbSelect([]);
+
+      // Insert: user msg returns nothing, assistant msg returns the message
       let insertCount = 0;
       vi.mocked(db.insert).mockImplementation(
         (table: unknown) =>
@@ -134,13 +181,13 @@ describe("chat routes", () => {
                 then: (resolve: (v: unknown) => void) => resolve(undefined),
               };
             }),
-          }) as any,
+          }) as never,
       );
       mockUpdate();
 
-      vi.mocked(chatAgent.stream).mockResolvedValue({
+      vi.mocked(streamText).mockReturnValue({
         textStream: mockTextStream(["Hel", "lo!"]),
-      } as any);
+      } as never);
 
       const res = await app.request(jsonPost("/chat/stream", { message: "Hi there" }));
 
@@ -150,22 +197,19 @@ describe("chat routes", () => {
       const body = await res.text();
       const events = parseSSE(body);
 
-      // First event: conversation ID
       expect(events[0].event).toBe("conversation");
       expect(JSON.parse(events[0].data).conversationId).toBe("conv-123");
 
-      // Token events
       const tokenEvents = events.filter((e) => e.event === "token");
       expect(tokenEvents).toHaveLength(2);
       expect(JSON.parse(tokenEvents[0].data).token).toBe("Hel");
       expect(JSON.parse(tokenEvents[1].data).token).toBe("lo!");
 
-      // Done event with messageId
       const doneEvent = events.find((e) => e.event === "done");
       expect(doneEvent).toBeDefined();
       expect(JSON.parse(doneEvent!.data).messageId).toBe("msg-1");
 
-      // Verify user message was saved before agent was called
+      // Verify user message was saved
       expect(insertCalls[0].values).toEqual(
         expect.objectContaining({
           role: "user",
@@ -174,12 +218,7 @@ describe("chat routes", () => {
         }),
       );
 
-      // Verify agent received correct memory context
-      expect(chatAgent.stream).toHaveBeenCalledWith("Hi there", {
-        memory: { thread: "conv-123", resource: "user-123" },
-      });
-
-      // Verify assistant message was saved with full concatenated response
+      // Verify assistant message was saved
       expect(insertCalls[1].values).toEqual(
         expect.objectContaining({
           role: "assistant",
@@ -187,29 +226,39 @@ describe("chat routes", () => {
           conversationId: "conv-123",
         }),
       );
+
+      // Verify streamText was called with correct args
+      expect(streamText).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "user", content: "Hi there" }),
+          ]),
+        }),
+      );
     });
 
-    it("sends SSE error event when agent throws (does not crash)", async () => {
+    it("sends SSE error event when streamText throws (does not crash)", async () => {
       const app = await createApp();
 
       vi.mocked(resolveConversation).mockResolvedValue("conv-123");
+      mockDbSelect([]);
       mockInsertTracked([]);
       mockUpdate();
-      vi.mocked(chatAgent.stream).mockRejectedValue(new Error("OpenRouter down"));
+      vi.mocked(streamText).mockImplementation(() => {
+        throw new Error("LLM down");
+      });
 
       const res = await app.request(jsonPost("/chat/stream", { message: "Hi there" }));
 
-      expect(res.status).toBe(200); // SSE always starts 200
+      expect(res.status).toBe(200);
       const body = await res.text();
       const events = parseSSE(body);
 
       const errorEvent = events.find((e) => e.event === "error");
       expect(errorEvent).toBeDefined();
       expect(JSON.parse(errorEvent!.data).error).toBe("Failed to generate response");
-      // Must NOT leak internal error details
-      expect(body).not.toContain("OpenRouter");
+      expect(body).not.toContain("LLM down");
 
-      // User message should still have been saved before the agent errored
       expect(insertCalls.length).toBeGreaterThanOrEqual(1);
       expect(insertCalls[0].values).toEqual(
         expect.objectContaining({ role: "user", content: "Hi there" }),
@@ -235,7 +284,7 @@ describe("chat routes", () => {
       );
     });
 
-    it("rejects empty message with 400 — never reaches agent or DB", async () => {
+    it("rejects empty message with 400 — never reaches LLM or DB", async () => {
       const app = await createApp();
 
       const res = await app.request(jsonPost("/chat/stream", { message: "" }));
@@ -243,7 +292,7 @@ describe("chat routes", () => {
       expect(res.status).toBe(400);
       const body = await res.json();
       expect(body.error).toContain("empty");
-      expect(chatAgent.stream).not.toHaveBeenCalled();
+      expect(streamText).not.toHaveBeenCalled();
       expect(resolveConversation).not.toHaveBeenCalled();
     });
 
@@ -253,7 +302,7 @@ describe("chat routes", () => {
       const res = await app.request(jsonPost("/chat/stream", { message: "x".repeat(10001) }));
 
       expect(res.status).toBe(400);
-      expect(chatAgent.stream).not.toHaveBeenCalled();
+      expect(streamText).not.toHaveBeenCalled();
     });
   });
 
@@ -267,7 +316,7 @@ describe("chat routes", () => {
       const mockOrderBy = vi.fn().mockReturnValue({ limit: mockLimit });
       const mockWhere = vi.fn().mockReturnValue({ orderBy: mockOrderBy });
       const mockFrom = vi.fn().mockReturnValue({ where: mockWhere });
-      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as any);
+      vi.mocked(db.select).mockReturnValue({ from: mockFrom } as never);
 
       const res = await app.request(
         new Request("http://localhost/chat/conversations?limit=10&offset=5"),
@@ -290,7 +339,7 @@ describe("chat routes", () => {
             orderBy: vi.fn().mockReturnValue({ limit: mockLimit }),
           }),
         }),
-      } as any);
+      } as never);
 
       await app.request(new Request("http://localhost/chat/conversations?limit=999"));
       expect(mockLimit).toHaveBeenCalledWith(100);
@@ -303,10 +352,10 @@ describe("chat routes", () => {
       vi.mocked(db.query.conversations.findFirst).mockResolvedValue({
         id: "conv-1",
         userId: "user-123",
-      } as any);
+      } as never);
       vi.mocked(db.delete).mockReturnValue({
         where: vi.fn().mockResolvedValue(undefined),
-      } as any);
+      } as never);
 
       const res = await app.request(
         new Request("http://localhost/chat/conversations/conv-1", {

@@ -1,7 +1,7 @@
 // indexer/index-reviews.ts — Embeds code review notes into the Qdrant "reviews" collection.
 
 import { logger } from "../config/logger.js";
-import { ensureCollection, qdrant } from "../mastra/infra.js";
+import { ensureCollection, rawQdrant } from "../mastra/infra.js";
 import { embedTexts, toUUID } from "./embed.js";
 
 const COLLECTION = "reviews";
@@ -28,19 +28,21 @@ export async function indexReviewNotes(notes: ReviewNote[]): Promise<{ chunks: n
 
   const embeddings = await embedTexts(notes.map((n) => n.text));
 
-  await qdrant.upsert({
-    indexName: COLLECTION,
-    vectors: embeddings,
-    ids: notes.map((n, i) => reviewId(n.commitSha, i)),
-    metadata: notes.map((n) => ({
-      text: n.text,
-      severity: n.severity,
-      category: n.category,
-      filePath: n.filePath,
-      commitSha: n.commitSha,
-      author: n.author,
-      date: n.date,
-      mergeMessage: n.mergeMessage,
+  await rawQdrant.upsert(COLLECTION, {
+    wait: true,
+    points: notes.map((n, i) => ({
+      id: reviewId(n.commitSha, i),
+      vector: embeddings[i],
+      payload: {
+        text: n.text,
+        severity: n.severity,
+        category: n.category,
+        filePath: n.filePath,
+        commitSha: n.commitSha,
+        author: n.author,
+        date: n.date,
+        mergeMessage: n.mergeMessage,
+      },
     })),
   });
 

@@ -8,7 +8,7 @@ import { logger } from "../config/logger.js";
 import { indexArchitecture } from "../indexer/index-architecture.js";
 import { indexCodebase } from "../indexer/index-codebase.js";
 import { indexStandards } from "../indexer/index-standards.js";
-import { nightlyReviewWorkflow } from "../mastra/workflows/nightly-review.js";
+import { runNightlyReview } from "../mastra/workflows/nightly-review.js";
 
 export type IndexJobName =
   | "index-standards"
@@ -49,11 +49,7 @@ async function runJob(jobName: IndexJobName): Promise<void> {
       break;
     }
     case "nightly-review": {
-      const run = await nightlyReviewWorkflow.createRun();
-      const result = await run.start({ inputData: {} });
-      if (result.status !== "success") {
-        throw new Error(`Nightly review finished with status: ${result.status}`);
-      }
+      await runNightlyReview();
       break;
     }
   }

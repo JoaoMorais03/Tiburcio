@@ -1,8 +1,10 @@
-# Tiburcio v2.0 — Team Intelligence Engine
+# Tiburcio v2.0 — Developer Intelligence MCP
 
 ## What This Document Is
 
-This is the complete technical plan for Tiburcio v2.0. It replaces `FUTURE_IMPROVEMENTS.md` as the active roadmap. Every decision here was informed by running v1.2.1 with 7 MCP tools under real Claude Code usage and honestly assessing what worked, what didn't, and what 8 developers actually need.
+Active roadmap for Tiburcio v2. Replaces `FUTURE_IMPROVEMENTS.md`. Informed by running v1.2.1 with 7 MCP tools under real Claude Code usage.
+
+**Status**: v2.0.0 shipped. Pillars 2-5 partially implemented. Remaining items tracked below.
 
 ---
 
@@ -658,12 +660,195 @@ That's the focus. That's the mission.
 
 ---
 
+## Implementation Status (v2.0.0)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Ollama local inference** | Done | `MODEL_PROVIDER=ollama`, `@ai-sdk/openai-compatible` |
+| **Compact mode (all tools)** | Done | Default `compact: true`, 300-1,500 tokens/call |
+| **getNightlySummary tool** | Done | Morning briefing from nightly pipeline |
+| **getChangeSummary tool** | Done | "What did I miss?" grouped by area/severity |
+| **`since` date filter** | Done | On searchReviews and getTestSuggestions |
+| **HTTP/SSE MCP transport** | Done | `/mcp/sse` + `/mcp/message`, Bearer auth via `TEAM_API_KEY` |
+| **README/docs rebrand** | Done | "Developer Intelligence MCP" positioning |
+| **Version 2.0.0** | Done | Across all files |
+| Webhook-triggered indexing | Not started | Pillar 1 (event-driven freshness) |
+| Convention scoring | Not started | Pillar 2.1 |
+| Weekly drift report | Not started | Pillar 2.2 |
+| getConventionReport tool | Not started | Pillar 4 |
+| getIndexStatus tool | Not started | Pillar 1.2 |
+| Git clone manager | Not started | Pillar 3.2 |
+| Caddy reverse proxy | Not started | Pillar 3.3 |
+| Smoke test suite | Not started | Phase D |
+
+---
+
 ## Open Questions
 
-Decisions to make before or during implementation:
+Decisions to make for post-v2.0 work:
 
-1. **PR-level convention review (Phase 5.2)** — Do we want real-time PR comments, or is nightly scoring enough? Real-time adds webhook complexity and API integration (GitHub/GitLab API tokens).
-2. **Ollama support** — Should v2 support local LLMs for air-gapped environments? Adds complexity to embedding and review pipelines.
-3. **Multi-tenant** — Should one pod serve multiple teams with different codebases? Currently designed for one codebase per deployment.
+1. **PR-level convention review** — Real-time PR comments vs nightly scoring. Real-time adds webhook complexity and GitHub/GitLab API tokens.
+2. ~~**Ollama support**~~ — **Resolved**: Implemented in v2.0.0 via `@ai-sdk/openai-compatible`.
+3. **Multi-tenant** — Should one pod serve multiple teams with different codebases? Currently one codebase per deployment.
 4. **Chat UI investment** — Is the web chat UI still worth maintaining, or should v2 go MCP-only? The chat UI has auth, conversations, memory — significant maintenance surface.
-5. **Langfuse** — Keep as optional dependency, or remove to simplify deployment? Currently adds a container and PostgreSQL dependency.
+5. **Langfuse** — Keep as optional dependency, or remove to simplify deployment?
+
+---
+
+## Future Architecture: Graph Layer
+
+> This section documents the vision for a future graph-based intelligence layer. Not planned for v2.x.
+
+### The Insight
+
+Vector search finds similar content. But real codebase intelligence requires understanding **relationships**: which files import which, which functions call which, which tests cover which code, which standards apply to which layers.
+
+### Graph Layer Concept
+
+```
+┌──────────────────────────────────────────────┐
+│              Tiburcio v3 Vision               │
+│                                               │
+│  ┌─────────┐     ┌──────────┐                │
+│  │ Qdrant  │────►│  Graph   │                │
+│  │ Vectors │     │  Layer   │                │
+│  └─────────┘     └──────────┘                │
+│       │               │                       │
+│  Semantic         Structural                  │
+│  similarity       relationships               │
+│  "find similar"   "find connected"            │
+│                                               │
+│  Combined: "find code similar to X            │
+│   that imports from Y and is tested by Z"     │
+└──────────────────────────────────────────────┘
+```
+
+### What the Graph Would Store
+
+| Node Type | Attributes | Source |
+|-----------|-----------|--------|
+| File | path, language, repo, lastModified | AST chunker |
+| Symbol | name, type (class/method/function), visibility | AST chunker |
+| Standard | name, category, content hash | standards/ docs |
+| Test | path, framework, targets | test file analysis |
+| Review | severity, category, date | nightly pipeline |
+
+| Edge Type | From → To | Source |
+|-----------|----------|--------|
+| `IMPORTS` | File → File | AST import analysis |
+| `DEFINES` | File → Symbol | AST parsing |
+| `CALLS` | Symbol → Symbol | AST call graph |
+| `TESTED_BY` | Symbol → Test | Test target analysis |
+| `VIOLATES` | Review → Standard | Nightly review |
+| `APPLIES_TO` | Standard → layer/language | Standard metadata |
+
+### Queries the Graph Enables
+
+- "What code calls this function and what tests cover it?" — `CALLS` + `TESTED_BY` traversal
+- "Which standards apply to this file?" — `APPLIES_TO` filtered by layer/language
+- "Show me all untested code that changed this week" — date-filtered reviews without `TESTED_BY` edges
+- "Which files would break if I change this interface?" — reverse `IMPORTS` + `CALLS` traversal
+
+### Technology Options
+
+| Option | Pros | Cons |
+|--------|------|------|
+| **Neo4j** | Full graph DB, Cypher queries, mature | Another container, significant complexity |
+| **Qdrant payload + Redis** | No new infra, store edges as metadata | Limited traversal, no real graph queries |
+| **SQLite with recursive CTEs** | Embedded, zero infra, good enough for small graphs | Not a real graph DB, won't scale |
+| **TypeScript in-memory graph** | Zero infra, fast, simple | Lost on restart, memory-bound |
+
+**Recommendation**: Start with Qdrant payload metadata (edges stored as arrays of connected IDs) + Redis for frequently-traversed paths. Migrate to Neo4j only if traversal complexity demands it.
+
+### Status
+
+This is a **vision document**. No implementation is planned for v2.x. The current vector-only approach handles all current use cases. The graph layer becomes valuable when:
+- The codebase grows beyond ~2000 files
+- "What calls this?" and "What tests this?" become frequent questions
+- Convention enforcement needs to understand transitive dependencies
+
+---
+
+## Future Architecture: MCP Client
+
+> This section documents the vision for Tiburcio as an MCP client, not just server. Not planned for v2.x.
+
+### The Insight
+
+Currently Tiburcio is a passive MCP server — Claude Code calls its tools. But Tiburcio could also be an MCP **client**, consuming tools from other MCP servers to enhance its intelligence.
+
+### Use Cases
+
+#### 1. GitHub MCP Server Integration
+
+Tiburcio connects to GitHub's MCP server to:
+- Fetch PR details and review comments
+- Read issue descriptions for context
+- Access branch protection rules for convention enforcement
+
+```
+Claude Code ──MCP──► Tiburcio (server)
+                         │
+                         ├──MCP──► GitHub MCP Server
+                         ├──MCP──► Linear MCP Server
+                         └──MCP──► Custom internal MCP servers
+```
+
+#### 2. Cross-Team Intelligence
+
+Multiple Tiburcio instances share intelligence:
+- Team A's Tiburcio consumes Team B's `searchSchemas` to understand shared database tables
+- Team B's Tiburcio consumes Team A's `searchStandards` to align conventions
+
+#### 3. IDE Context
+
+Tiburcio consumes an IDE MCP server to understand:
+- Which file the developer has open (focus context)
+- Recent edit history (active work context)
+- Breakpoints and debug state (problem context)
+
+### Architecture
+
+```
+┌─────────────────────────────────────────┐
+│         Tiburcio as MCP Hub             │
+│                                         │
+│  MCP Server (9 tools)                   │
+│     ▲                                   │
+│     │ Claude Code connects here         │
+│     │                                   │
+│  MCP Client (consumes other servers)    │
+│     │                                   │
+│     ├──► GitHub (PRs, issues, reviews)  │
+│     ├──► Linear (tickets, sprints)      │
+│     ├──► Other Tiburcio instances       │
+│     └──► IDE context servers            │
+└─────────────────────────────────────────┘
+```
+
+### Mastra Support
+
+Mastra already supports MCP client connections via `MCPConfiguration`:
+
+```typescript
+import { MCPConfiguration } from "@mastra/mcp";
+
+const mcpConfig = new MCPConfiguration({
+  servers: {
+    github: {
+      url: new URL("https://github-mcp.internal/sse"),
+      transport: "sse",
+    },
+  },
+});
+
+// Tools from connected servers available to Tiburcio's agents
+const tools = await mcpConfig.getTools();
+```
+
+### Status
+
+This is a **vision document**. No implementation is planned for v2.x. The MCP client capability becomes valuable when:
+- The team uses multiple MCP servers that could share context
+- PR-level convention review requires GitHub API access
+- Cross-team intelligence sharing is needed

@@ -1,6 +1,6 @@
 # Contributing to Tiburcio
 
-Thanks for your interest in contributing! Tiburcio is an onboarding knowledge system — every contribution should make it easier for new developers to get productive on a codebase.
+Thanks for your interest in contributing! Tiburcio is a developer intelligence MCP — a codebase intelligence layer that makes Claude Code actually understand your team's codebase, conventions, and recent changes.
 
 ## Claude Code
 
@@ -19,7 +19,8 @@ docker compose up db redis qdrant -d
 
 # Copy env and configure
 cp .env.example .env
-# Edit .env — at minimum set OPENROUTER_API_KEY
+# Edit .env — Ollama is the default (no API key needed).
+# Set MODEL_PROVIDER=openai-compatible + INFERENCE_* vars to use OpenRouter/vLLM/etc.
 
 # Run migrations
 cd backend && pnpm db:migrate
@@ -32,17 +33,19 @@ pnpm dev  # from root — starts both backend and frontend
 
 Tiburcio operates in two modes:
 
-- **Day mode**: Answers developer questions via chat UI (Vue 3, SSE streaming) and MCP server (Claude Code integration). The Mastra AI agent uses 7 RAG tools to query Qdrant vector collections.
+- **Day mode**: 10 MCP tools serve Claude Code (primary) and the chat UI (secondary). Each tool returns compact, token-efficient answers from Qdrant vector collections.
 - **Night mode**: BullMQ cron jobs run at 2 AM to re-index changed files, review yesterday's merges against team standards, and generate test suggestions.
 
 Key areas of the codebase:
-- `backend/src/mastra/infra.ts` — Shared singletons (qdrant, openrouter, ensureCollection)
-- `backend/src/mastra/agents/` — Chat agent + code review agent
-- `backend/src/mastra/tools/` — 7 RAG tools (Qdrant vector search)
-- `backend/src/mastra/workflows/` — Nightly review workflow (multi-step)
-- `backend/src/indexer/` — Code chunking, embedding (via OpenRouter), indexing pipelines
+- `backend/src/mastra/infra.ts` — Qdrant client singleton + ensureCollection (models via `lib/model-provider.ts`)
+- `backend/src/mcp-tools.ts` — Single source of truth for all 10 MCP tool registrations
+- `backend/src/lib/model-provider.ts` — Provider-agnostic model factory (Ollama or OpenAI-compatible)
+- `backend/src/mastra/tools/` — 10 RAG tools (Qdrant vector search, compact mode default)
+- `backend/src/mastra/workflows/` — Nightly review workflow (multi-step AI SDK orchestration)
+- `backend/src/indexer/` — Code chunking, embedding, indexing pipelines
 - `backend/src/jobs/` — BullMQ background jobs and nightly cron schedule
-- `backend/src/routes/` — HTTP endpoints (auth, chat SSE, admin)
+- `backend/src/routes/` — HTTP endpoints (auth, chat SSE, admin, MCP HTTP/SSE)
+- `backend/src/graph/` — Optional Neo4j graph layer for `getImpactAnalysis`
 - `frontend/src/stores/` — Pinia state management (auth, chat, rate-limit)
 - `standards/` — Sample knowledge base (replace with your own docs)
 
@@ -51,6 +54,7 @@ Key areas of the codebase:
 - **Linting**: [Biome](https://biomejs.dev/) — run `pnpm check` in backend or frontend
 - **Formatting**: Biome handles formatting too — 2 spaces, double quotes, semicolons, trailing commas
 - **TypeScript**: Strict mode enabled. No `any` in production code (allowed in tests).
+- **Zod**: Import from `"zod"` (v3), not `"zod/v4"` — AI SDK v6 requires Zod v3.
 
 ```bash
 # Check lint + types
@@ -61,7 +65,7 @@ cd frontend && pnpm check
 ## Running Tests
 
 ```bash
-# Backend tests (132 tests, no external deps needed)
+# Backend tests (137 tests, no external deps needed)
 cd backend && pnpm test
 
 # Frontend tests (30 tests)
@@ -72,7 +76,7 @@ cd frontend && pnpm test
 
 All PRs run automated checks via GitHub Actions:
 - **Lint & Type Check** — Biome + TypeScript on both backend and frontend
-- **Tests** — 132 backend unit tests + 30 frontend unit tests
+- **Tests** — 137 backend unit tests + 30 frontend unit tests
 - **Docker Build** — Validates multi-stage builds for both services
 
 To run the same checks locally before pushing:
@@ -90,8 +94,8 @@ Tagging a version (e.g., `v2.2.0`) triggers the release workflow:
 
 To create a release (maintainers only):
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 ## Pull Request Process
@@ -117,24 +121,25 @@ test: add admin route integration tests
 
 ## Areas Where Contributions Are Welcome
 
-### Onboarding Intelligence (High Impact)
-- Learning path generation for new developers
-- "What did I miss?" change summaries
-- Convention adherence dashboards
+### Nightly Intelligence (High Impact)
+- Convention adherence scoring and drift reports
+- Enhanced test suggestion quality and scaffold generation
+- Support for additional programming languages in AST chunking
+
+### MCP & Developer Experience
+- Additional MCP tools (convention report, index status, search by author)
+- Token efficiency improvements across all tools
+- Webhook-triggered incremental indexing (instead of nightly-only)
 
 ### Knowledge & RAG
 - Improved chunking strategies (more languages, better boundaries)
-- Embedding model alternatives
+- Embedding model alternatives and benchmarks
 - Knowledge gap detection (under-documented code areas)
 
 ### Infrastructure
-- CI/CD pipeline (GitHub Actions for tests, lint, type-check)
-- Notification webhooks (Slack/Discord summaries from nightly pipeline)
-
-### Security
-- CSP headers for production deployment
-- Rate limit tuning per endpoint
-- Audit logging for admin actions
+- Git clone support for remote repos (currently requires local path)
+- Notification integrations (Slack/Discord summaries from nightly pipeline)
+- Multi-tenant support (per-team Qdrant namespaces)
 
 ## Reporting Bugs
 

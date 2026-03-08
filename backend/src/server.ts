@@ -1,9 +1,8 @@
-// server.ts — Hono web server with Mastra agent, Pino logging,
+// server.ts — Hono web server with Pino logging,
 // Redis rate limiting, SSE streaming, and background jobs.
 
 import type { ServerType } from "@hono/node-server";
 import { serve } from "@hono/node-server";
-import { MastraServer } from "@mastra/hono";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -19,12 +18,14 @@ import { logger } from "./config/logger.js";
 import { redis } from "./config/redis.js";
 import { connection, db } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
+import { closeGraphDriver, ensureGraphSchema } from "./graph/client.js";
 import { indexQueue, scheduleNightlyJobs, startIndexWorker } from "./jobs/queue.js";
-import { mastra, qdrant } from "./mastra/index.js";
+import { deleteCollection, listCollections, rawQdrant } from "./mastra/infra.js";
 import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limiter.js";
 import adminRouter from "./routes/admin.js";
 import authRouter from "./routes/auth.js";
 import chatRouter from "./routes/chat.js";
+import mcpRouter from "./routes/mcp.js";
 
 const app = new Hono<{ Variables: JwtVariables }>();
 
@@ -74,6 +75,10 @@ app.route("/api/auth", authRouter);
 app.route("/api/chat", chatRouter);
 app.route("/api/admin", adminRouter);
 
+// MCP HTTP/SSE transport — outside /api/* middleware chain.
+// Uses its own Bearer token auth via TEAM_API_KEY.
+app.route("/mcp", mcpRouter);
+
 app.get("/api/health", async (c) => {
   const checks = { database: false, redis: false, qdrant: false };
 
@@ -88,7 +93,7 @@ app.get("/api/health", async (c) => {
   } catch {}
 
   try {
-    await qdrant.listIndexes();
+    await rawQdrant.getCollections();
     checks.qdrant = true;
   } catch {}
 
@@ -106,14 +111,7 @@ app.get("/api/health", async (c) => {
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "1.2.1" }));
-
-// --- MastraServer ---
-// Protect Mastra-managed routes (agent invocation, tool execution, workflows)
-// behind JWT auth so they are not publicly accessible.
-app.use("/api/mastra/*", cookieAuth);
-
-const mastraServer = new MastraServer({ app, mastra });
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.1.0" }));
 
 // --- Startup + Shutdown ---
 
@@ -122,26 +120,30 @@ let indexWorker: Awaited<ReturnType<typeof startIndexWorker>> | undefined;
 
 async function start(): Promise<void> {
   await runMigrations();
-  await mastraServer.init();
+  await ensureGraphSchema(); // no-op when NEO4J_URI is not set
 
   indexWorker = startIndexWorker();
   await scheduleNightlyJobs();
 
   // Embedding model migration: if the model changed, drop all collections
   // so they get re-indexed with the new embedding dimensions/space.
+  const currentEmbeddingId =
+    env.MODEL_PROVIDER === "ollama"
+      ? `ollama:${env.OLLAMA_EMBEDDING_MODEL}`
+      : `openai-compatible:${env.INFERENCE_EMBEDDING_MODEL ?? "unknown"}`;
   try {
     const prevModel = await redis.get("tiburcio:embedding-model");
-    if (prevModel && prevModel !== env.EMBEDDING_MODEL) {
+    if (prevModel && prevModel !== currentEmbeddingId) {
       logger.warn(
-        { previous: prevModel, current: env.EMBEDDING_MODEL },
+        { previous: prevModel, current: currentEmbeddingId },
         "Embedding model changed — dropping all collections for re-indexing",
       );
-      const collections = await qdrant.listIndexes();
+      const collections = await listCollections();
       for (const name of collections) {
-        await qdrant.deleteIndex({ indexName: name });
+        await deleteCollection(name);
       }
     }
-    await redis.set("tiburcio:embedding-model", env.EMBEDDING_MODEL);
+    await redis.set("tiburcio:embedding-model", currentEmbeddingId);
   } catch (err) {
     logger.warn({ err }, "Could not check embedding model migration");
   }
@@ -152,7 +154,7 @@ async function start(): Promise<void> {
   //  - Restart after partial failure: only missing ones are re-queued
   //  - CODEBASE_REPOS added later: codebase gets indexed on next restart
   try {
-    const collections = await qdrant.listIndexes();
+    const collections = await listCollections();
     const existing = new Set(collections);
 
     if (!existing.has("standards")) {
@@ -197,6 +199,7 @@ async function shutdown(signal: string): Promise<void> {
   await indexWorker?.close().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});
+  await closeGraphDriver().catch(() => {});
 
   logger.info("All resources closed");
   process.exit(0);
