@@ -31,7 +31,7 @@ COPY backend/ backend/
 RUN pnpm --filter tiburcio-backend build
 
 # Deploy: standalone directory with production deps only
-RUN pnpm deploy --filter tiburcio-backend --prod /app/prod
+RUN pnpm deploy --filter tiburcio-backend --prod --legacy /app/prod
 
 # --- Stage 2: Production ---
 FROM node:22-alpine AS runner
