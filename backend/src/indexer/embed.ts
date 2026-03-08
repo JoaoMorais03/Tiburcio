@@ -55,7 +55,7 @@ export async function embedText(text: string): Promise<number[]> {
     value: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });
-  generation?.end({ output: { dimensions: embedding.length } });
+  try { generation?.end({ output: { dimensions: embedding.length } }); } catch { /* observability must never crash embeddings */ }
   return embedding;
 }
 
@@ -72,6 +72,6 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     values: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });
-  generation?.end({ output: { count: embeddings.length, dimensions: embeddings[0]?.length } });
+  try { generation?.end({ output: { count: embeddings.length, dimensions: embeddings[0]?.length } }); } catch { /* observability must never crash embeddings */ }
   return embeddings;
 }

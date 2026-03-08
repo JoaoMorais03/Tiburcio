@@ -168,7 +168,7 @@ chatRouter.post("/stream", async (c) => {
         .values({ conversationId, role: "assistant", content: fullResponse })
         .returning();
 
-      trace?.update({ output: { responseLength: fullResponse.length } });
+      try { trace?.update({ output: { responseLength: fullResponse.length } }); } catch { /* observability must never crash chat */ }
 
       await sseStream.writeSSE({
         event: "done",

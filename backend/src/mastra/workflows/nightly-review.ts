@@ -343,7 +343,7 @@ ${diffSummary}`;
           }
         }
 
-        generation?.end({ output: { notesCount: notes.length } });
+        try { generation?.end({ output: { notesCount: notes.length } }); } catch { /* observability must never crash nightly pipeline */ }
 
         for (const note of notes) {
           allNotes.push({
@@ -447,7 +447,7 @@ Respond with ONLY a test scaffold — the actual test code a developer would use
           abortSignal: AbortSignal.timeout(120_000),
         });
 
-        generation?.end({ output: { hasContent: !!text.trim() } });
+        try { generation?.end({ output: { hasContent: !!text.trim() } }); } catch { /* observability must never crash nightly pipeline */ }
 
         if (text.trim()) {
           allSuggestions.push({
