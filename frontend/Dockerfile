@@ -3,8 +3,8 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Corporate proxy CA cert: inject before any network calls
-COPY node-certs.pe[m] /usr/local/share/ca-certificates/node-certs.pem
+# Optional corporate proxy CA cert — copy into dir (trailing slash = no-op when absent)
+COPY node-certs.pe[m] /usr/local/share/ca-certificates/
 RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
     cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
     fi

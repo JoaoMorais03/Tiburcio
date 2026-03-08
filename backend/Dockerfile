@@ -3,9 +3,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# Corporate proxy CA cert: inject before any network calls
+# Optional corporate proxy CA cert — copy into dir (trailing slash = no-op when absent)
 RUN mkdir -p /usr/local/share/ca-certificates
-COPY node-certs.pe[m] /usr/local/share/ca-certificates/node-certs.pem
+COPY node-certs.pe[m] /usr/local/share/ca-certificates/
 RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
     cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
     fi
@@ -31,12 +31,12 @@ COPY backend/ backend/
 RUN pnpm --filter tiburcio-backend build
 
 # Deploy: standalone directory with production deps only
-RUN pnpm deploy --filter tiburcio-backend --prod --legacy /app/prod
+RUN pnpm deploy --filter tiburcio-backend --prod /app/prod
 
 # --- Stage 2: Production ---
 FROM node:22-alpine AS runner
 
-# Corporate proxy CA cert: inject before apk so Alpine trusts TLS
+# Optional corporate proxy CA cert
 COPY --from=builder /usr/local/share/ca-certificates/node-certs.pe[m] /usr/local/share/ca-certificates/
 RUN if [ -f /usr/local/share/ca-certificates/node-certs.pem ]; then \
     cat /usr/local/share/ca-certificates/node-certs.pem >> /etc/ssl/certs/ca-certificates.crt; \
