@@ -28,6 +28,10 @@ vi.mock("../lib/model-provider.js", () => ({
   getChatModel: vi.fn(() => ({})),
 }));
 
+vi.mock("../lib/langfuse.js", () => ({
+  getLangfuse: () => null,
+}));
+
 // Stub all 9 tool modules so they don't pull in Qdrant/embed deps
 vi.mock("../mastra/tools/search-standards.js", () => ({
   searchStandardsTool: { description: "stub", parameters: {}, execute: vi.fn() },

@@ -34,6 +34,7 @@ const baseSchema = z.object({
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
   LANGFUSE_BASE_URL: z.string().optional(),
+  LANGFUSE_RECORD_IO: z.string().optional().default("true"),
 
   // Multi-repo codebase indexing. Format: name:path:branch (comma-separated).
   // Single repo:  CODEBASE_REPOS=myproject:/codebase:develop
@@ -91,9 +92,7 @@ export type Env = z.infer<typeof envSchema>;
 
 const parsed = envSchema.parse(process.env) as Env;
 
-// Auto-default EMBEDDING_DIMENSIONS based on provider when not explicitly set.
-// Ollama default: 768 (nomic-embed-text). OpenAI-compatible default: 4096 (qwen3-embedding-8b).
-// Override with EMBEDDING_DIMENSIONS env var if using a different embedding model.
+// Auto-default EMBEDDING_DIMENSIONS based on provider when not explicitly set
 if (parsed.EMBEDDING_DIMENSIONS == null) {
   parsed.EMBEDDING_DIMENSIONS = parsed.MODEL_PROVIDER === "ollama" ? 768 : 4096;
 }

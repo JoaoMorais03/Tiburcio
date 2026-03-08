@@ -281,7 +281,7 @@ pnpm index:architecture
 | **Database** | PostgreSQL 17 + [Drizzle ORM](https://orm.drizzle.team) |
 | **Auth** | httpOnly cookie JWT (HS256) + refresh token rotation + bcrypt |
 | **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis (nightly cron) |
-| **Observability** | Langfuse env vars accepted (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`) but telemetry instrumentation is not yet active |
+| **Observability** | Langfuse (self-hosted) — traces MCP tool calls, LLM generations (chat, embeddings, contextualization, nightly review), and background jobs. Set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` to activate. |
 | **Testing** | [Vitest](https://vitest.dev) — 167 tests (137 backend + 30 frontend) |
 
 ### Qdrant Collections
@@ -401,7 +401,7 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 
 ### Observability
 
-Langfuse env vars are accepted but telemetry instrumentation is not yet active. Set these for future use when instrumentation lands:
+Langfuse provides full observability for LLM calls, MCP tool invocations, and background jobs. Start Langfuse and set the keys to activate:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|

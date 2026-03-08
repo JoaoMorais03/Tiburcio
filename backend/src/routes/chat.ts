@@ -11,6 +11,7 @@ import { logger } from "../config/logger.js";
 import { db } from "../db/connection.js";
 import { conversations, messages } from "../db/schema.js";
 import { resolveConversation } from "../helpers/conversation.js";
+import { getLangfuse } from "../lib/langfuse.js";
 import { getChatModel } from "../lib/model-provider.js";
 import { getArchitectureTool } from "../mastra/tools/get-architecture.js";
 import { getChangeSummaryTool } from "../mastra/tools/get-change-summary.js";
@@ -109,6 +110,14 @@ chatRouter.post("/stream", async (c) => {
       // biome-ignore lint/suspicious/noControlCharactersInRegex: intentional input sanitization
       const sanitized = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "").trim();
 
+      const langfuse = getLangfuse();
+      const trace = langfuse?.trace({
+        name: "chat:stream",
+        userId,
+        metadata: { conversationId },
+        input: { message: sanitized.slice(0, 500) },
+      });
+
       const { textStream } = streamText({
         model: getChatModel(),
         system: CHAT_SYSTEM_PROMPT,
@@ -158,6 +167,8 @@ chatRouter.post("/stream", async (c) => {
         .insert(messages)
         .values({ conversationId, role: "assistant", content: fullResponse })
         .returning();
+
+      trace?.update({ output: { responseLength: fullResponse.length } });
 
       await sseStream.writeSSE({
         event: "done",

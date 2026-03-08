@@ -19,7 +19,13 @@ import { redis } from "./config/redis.js";
 import { connection, db } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
 import { closeGraphDriver, ensureGraphSchema } from "./graph/client.js";
-import { indexQueue, scheduleNightlyJobs, startIndexWorker } from "./jobs/queue.js";
+import {
+  indexQueue,
+  queueNightlyReview,
+  scheduleNightlyJobs,
+  startIndexWorker,
+} from "./jobs/queue.js";
+import { isLangfuseConfigured, shutdownLangfuse } from "./lib/langfuse.js";
 import { deleteCollection, listCollections, rawQdrant } from "./mastra/infra.js";
 import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limiter.js";
 import adminRouter from "./routes/admin.js";
@@ -105,13 +111,14 @@ app.get("/api/health", async (c) => {
     {
       status: healthy ? "ok" : "degraded",
       checks,
+      langfuse: isLangfuseConfigured(),
       timestamp: new Date().toISOString(),
     },
     healthy ? 200 : 503,
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.1.0" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.2.0" }));
 
 // --- Startup + Shutdown ---
 
@@ -179,6 +186,13 @@ async function start(): Promise<void> {
         jobId: "init-codebase",
       });
     }
+
+    // Queue nightly review on first boot if reviews/test-suggestions are missing.
+    // Runs after codebase indexing completes (BullMQ concurrency: 1 = sequential).
+    if (!existing.has("reviews") || !existing.has("test-suggestions")) {
+      logger.info("Missing 'reviews'/'test-suggestions' — queuing initial nightly review");
+      await queueNightlyReview("init-nightly-review");
+    }
   } catch (err) {
     logger.warn({ err }, "Could not check Qdrant for auto-indexing");
   }
@@ -197,6 +211,7 @@ async function shutdown(signal: string): Promise<void> {
 
   httpServer?.close();
   await indexWorker?.close().catch(() => {});
+  await shutdownLangfuse().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});
   await closeGraphDriver().catch(() => {});

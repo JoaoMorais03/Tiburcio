@@ -4,6 +4,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+import { traceToolCall } from "./lib/langfuse.js";
 import { executeGetArchitecture } from "./mastra/tools/get-architecture.js";
 import { executeGetChangeSummary } from "./mastra/tools/get-change-summary.js";
 import { executeGetImpactAnalysis } from "./mastra/tools/get-impact-analysis.js";
@@ -33,7 +34,9 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, category, compact }) => {
-      const result = await executeSearchStandards(query, category, compact);
+      const result = await traceToolCall("searchStandards", { query, category, compact }, () =>
+        executeSearchStandards(query, category, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -54,7 +57,7 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ name }) => {
-      const result = await executeGetPattern(name);
+      const result = await traceToolCall("getPattern", { name }, () => executeGetPattern(name));
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -100,7 +103,11 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, repo, language, layer, compact }) => {
-      const result = await executeSearchCode(query, repo, language, layer, compact);
+      const result = await traceToolCall(
+        "searchCode",
+        { query, repo, language, layer, compact },
+        () => executeSearchCode(query, repo, language, layer, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -119,7 +126,9 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, area, compact }) => {
-      const result = await executeGetArchitecture(query, area, compact);
+      const result = await traceToolCall("getArchitecture", { query, area, compact }, () =>
+        executeGetArchitecture(query, area, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -138,7 +147,9 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, tableName, compact }) => {
-      const result = await executeSearchSchemas(query, tableName, compact);
+      const result = await traceToolCall("searchSchemas", { query, tableName, compact }, () =>
+        executeSearchSchemas(query, tableName, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -161,7 +172,11 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, severity, category, since, compact }) => {
-      const result = await executeSearchReviews(query, severity, category, since, compact);
+      const result = await traceToolCall(
+        "searchReviews",
+        { query, severity, category, since, compact },
+        () => executeSearchReviews(query, severity, category, since, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -181,7 +196,11 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, language, since, compact }) => {
-      const result = await executeGetTestSuggestions(query, language, since, compact);
+      const result = await traceToolCall(
+        "getTestSuggestions",
+        { query, language, since, compact },
+        () => executeGetTestSuggestions(query, language, since, compact),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -198,7 +217,9 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ daysBack }) => {
-      const result = await executeGetNightlySummary(daysBack);
+      const result = await traceToolCall("getNightlySummary", { daysBack }, () =>
+        executeGetNightlySummary(daysBack),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -219,7 +240,9 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ since, area }) => {
-      const result = await executeGetChangeSummary(since, area);
+      const result = await traceToolCall("getChangeSummary", { since, area }, () =>
+        executeGetChangeSummary(since, area),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );
@@ -241,7 +264,11 @@ export function registerTools(server: McpServer): void {
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async ({ target, targetType, depth, repo }) => {
-      const result = await executeGetImpactAnalysis(target, targetType, depth ?? 2, repo);
+      const result = await traceToolCall(
+        "getImpactAnalysis",
+        { target, targetType, depth, repo },
+        () => executeGetImpactAnalysis(target, targetType, depth ?? 2, repo),
+      );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
   );

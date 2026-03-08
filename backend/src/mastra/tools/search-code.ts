@@ -22,12 +22,11 @@ interface QdrantPoint {
 function mapPointToCompact(p: QdrantPoint) {
   const m = (p.payload ?? {}) as Record<string, unknown>;
   const text = (m.text as string) ?? "";
-  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
   return {
     filePath: (m.filePath as string) ?? "unknown",
     symbolName: (m.symbolName as string) ?? null,
     lineRange: `${(m.startLine as number) ?? 0}-${(m.endLine as number) ?? 0}`,
-    summary: truncate(firstLine, 120),
+    codePreview: truncate(text, 600),
     score: p.score ?? 0,
   };
 }
@@ -52,6 +51,48 @@ function mapPointToFull(p: QdrantPoint, headerMap: Map<string, string>) {
     classContext: truncate((needsHeader ? headerMap.get(headerChunkId) : null) ?? "", 800),
     score: p.score ?? 0,
   };
+}
+
+function getChunkMeta(p: QdrantPoint) {
+  const m = (p.payload ?? {}) as Record<string, unknown>;
+  return {
+    filePath: (m.filePath as string) ?? "unknown",
+    chunkType: (m.chunkType as string) ?? "other",
+  };
+}
+
+/** Demote and deduplicate header chunks so non-header results win. */
+function filterHeaderChunks(points: QdrantPoint[]): QdrantPoint[] {
+  // Track which files have non-header results and the first header seen per file
+  const filesWithNonHeader = new Set<string>();
+  const firstHeaderPerFile = new Map<string, QdrantPoint>();
+
+  for (const p of points) {
+    const { filePath, chunkType } = getChunkMeta(p);
+    if (chunkType !== "header") {
+      filesWithNonHeader.add(filePath);
+    } else if (!firstHeaderPerFile.has(filePath)) {
+      firstHeaderPerFile.set(filePath, p);
+    }
+  }
+
+  const result: QdrantPoint[] = [];
+  for (const p of points) {
+    const { filePath, chunkType } = getChunkMeta(p);
+    if (chunkType !== "header") {
+      result.push(p);
+      continue;
+    }
+    // Drop header if a non-header result exists for the same file
+    if (filesWithNonHeader.has(filePath)) continue;
+    // Keep only the best header per file (first encountered = highest RRF score)
+    if (firstHeaderPerFile.get(filePath) !== p) continue;
+    // Demote header-only results with 0.5x score multiplier
+    result.push({ ...p, score: (p.score ?? 0) * 0.5 });
+  }
+
+  result.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return result;
 }
 
 /** Fetch header chunks in a single batch retrieve call. */
@@ -115,7 +156,7 @@ export async function executeSearchCode(
     });
     const tSearch = Date.now();
 
-    const points = rawResults.points as QdrantPoint[];
+    const points = filterHeaderChunks(rawResults.points as QdrantPoint[]);
 
     if (points.length === 0) {
       logger.info(

@@ -55,11 +55,12 @@ docker compose ps              # check service health
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
 - **MCP Annotations**: All 10 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
-- **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, summaries). Full mode via `compact: false`.
+- **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, code previews). Full mode via `compact: false`.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
 - **Indexing**: Per-file pipeline with `p-limit(3)` concurrency — chunk, contextualize, embed, upsert per file. Data appears in Qdrant immediately. ~20-50 min for 558 files.
+- **Observability**: Langfuse (`lib/langfuse.ts`) — lazy singleton, traces MCP tool calls, LLM generations (embeddings, contextualization, nightly review, chat), and background jobs. Activated by setting `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`. `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy.
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
 - **MCP**: stdio transport (`backend/src/mcp.ts`) + HTTP/SSE transport (`backend/src/routes/mcp.ts`, Bearer auth via `TEAM_API_KEY`)
 
@@ -77,7 +78,7 @@ All shared singletons live in `backend/src/mastra/infra.ts`: `rawQdrant` (Qdrant
 ### Embedding layer separation
 `backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
 
-### RAG pipeline (v2.1.0)
+### RAG pipeline (v2.2.0)
 1. **AST chunking** — tree-sitter parses Java/TypeScript, regex splits Vue SFC sections then AST-parses `<script>`, SQL stays regex-based
 2. **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic technique, 49% fewer retrieval failures)
 3. **Header chunk linkage** — each chunk stores `headerChunkId` pointing to its file's imports/class declaration chunk
@@ -111,6 +112,7 @@ backend/src/
   config/env.ts          # Zod-validated env vars (envSchema exported for tests)
   config/logger.ts       # Pino logger
   config/redis.ts        # ioredis client
+  lib/langfuse.ts        # Langfuse singleton (getLangfuse, shutdownLangfuse, traceToolCall)
   lib/model-provider.ts  # getChatModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
   db/schema.ts           # Drizzle schema (users, conversations, messages)
   db/connection.ts       # postgres driver + drizzle instance
@@ -152,7 +154,7 @@ backend/src/
 - **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:qwen/qwen3-embedding-8b`). Re-indexing is triggered automatically.
 - **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. `INFERENCE_EMBEDDING_MODEL` sets the embedding model (e.g., `qwen/qwen3-embedding-8b`). When using Ollama, no external API keys are needed.
 - **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama/nomic-embed-text) or 4096 (openai-compatible/qwen3-embedding-8b) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
-- **Langfuse is optional**: Docker Compose profile `observability`. Start with `docker compose --profile observability up -d`. Backend works without Langfuse env vars — all three are `z.string().optional()`.
+- **Langfuse is optional**: Backend works without Langfuse env vars — all keys are `z.string().optional()`. When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, `getLangfuse()` returns a singleton client that traces MCP tool calls, LLM generations, and background jobs. When not set, all tracing is no-op (null checks). `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy. `shutdownLangfuse()` is called on graceful shutdown in both `server.ts` and `mcp.ts`. Docker Compose profile: `docker compose --profile observability up -d`.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
 - **BullMQ lock duration**: Worker uses `lockDuration: 300_000` (5 min) and `lockRenewTime: 60_000` (1 min). Default 30s lock causes stalled-job detection during long indexing runs.
@@ -191,4 +193,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v2.1.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v2.2.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.

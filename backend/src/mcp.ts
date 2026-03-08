@@ -4,11 +4,20 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import { shutdownLangfuse } from "./lib/langfuse.js";
 import { registerTools } from "./mcp-tools.js";
 
-const server = new McpServer({ name: "tiburcio", version: "2.1.0" });
+const server = new McpServer({ name: "tiburcio", version: "2.2.0" });
 
 registerTools(server);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
+
+async function shutdown(): Promise<void> {
+  await shutdownLangfuse();
+  process.exit(0);
+}
+
+process.on("SIGTERM", () => void shutdown());
+process.on("SIGINT", () => void shutdown());

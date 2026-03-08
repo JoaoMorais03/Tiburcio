@@ -28,6 +28,7 @@ import {
 import type { ReviewNote } from "../../indexer/index-reviews.js";
 import { indexReviewNotes } from "../../indexer/index-reviews.js";
 import { redactSecrets } from "../../indexer/redact.js";
+import { getLangfuse } from "../../lib/langfuse.js";
 import { getChatModel } from "../../lib/model-provider.js";
 import { ensureCollection, rawQdrant } from "../infra.js";
 import { searchCodeTool } from "../tools/search-code.js";
@@ -297,6 +298,17 @@ Diffs:
 ${diffSummary}`;
 
       try {
+        const langfuse = getLangfuse();
+        const trace = langfuse?.trace({
+          name: "nightly:codeReview",
+          input: { repo: repo.name, commit: commit.sha },
+        });
+        const generation = trace?.generation({
+          name: "codeReview",
+          model: "chat",
+          input: { commitSha: commit.sha, filesChanged: commit.files.length },
+        });
+
         const { text } = await generateText({
           model: getChatModel(),
           system: CODE_REVIEW_SYSTEM_PROMPT,
@@ -330,6 +342,8 @@ ${diffSummary}`;
             continue;
           }
         }
+
+        generation?.end({ output: { notesCount: notes.length } });
 
         for (const note of notes) {
           allNotes.push({
@@ -415,12 +429,25 @@ ${redactedDiff}
 Respond with ONLY a test scaffold — the actual test code a developer would use as a starting point. Use the testing framework appropriate for the language (Vitest for TypeScript, JUnit for Java). Keep it focused and practical.`;
 
       try {
+        const langfuse = getLangfuse();
+        const trace = langfuse?.trace({
+          name: "nightly:testSuggestion",
+          input: { filePath, commitSha: commit.sha },
+        });
+        const generation = trace?.generation({
+          name: "testSuggestion",
+          model: "chat",
+          input: { filePath, language: lang },
+        });
+
         const { text } = await generateText({
           model: getChatModel(),
           system: TEST_SUGGESTION_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
           abortSignal: AbortSignal.timeout(120_000),
         });
+
+        generation?.end({ output: { hasContent: !!text.trim() } });
 
         if (text.trim()) {
           allSuggestions.push({
