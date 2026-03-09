@@ -7,7 +7,13 @@ vi.mock("../indexer/embed.js", () => ({
 }));
 
 vi.mock("../mastra/infra.js", () => ({
-  rawQdrant: { search: vi.fn(), query: vi.fn(), retrieve: vi.fn(), scroll: vi.fn() },
+  rawQdrant: {
+    search: vi.fn(),
+    query: vi.fn(),
+    retrieve: vi.fn(),
+    scroll: vi.fn(),
+    count: vi.fn(),
+  },
 }));
 
 vi.mock("../mastra/tools/git-fallback.js", async (importOriginal) => {
@@ -57,6 +63,7 @@ vi.mock("node:fs/promises", () => ({
 import { readdir, readFile } from "node:fs/promises";
 import { embedText } from "../indexer/embed.js";
 import { rawQdrant } from "../mastra/infra.js";
+import { isCollectionPopulated } from "../mastra/tools/git-fallback.js";
 
 /** Call the execute function from a tool module's exported tool object. */
 async function executeTool(
@@ -493,6 +500,7 @@ describe("RAG tools", () => {
 
     it("returns recovery guidance when no results found", async () => {
       vi.mocked(rawQdrant.search).mockResolvedValue([]);
+      vi.mocked(isCollectionPopulated).mockResolvedValueOnce(true);
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "nonexistent",
         severity: "critical",
@@ -579,6 +587,7 @@ describe("RAG tools", () => {
 
     it("returns recovery guidance when no results found", async () => {
       vi.mocked(rawQdrant.search).mockResolvedValue([]);
+      vi.mocked(isCollectionPopulated).mockResolvedValueOnce(true);
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "nonexistent",
         language: "java",
@@ -652,8 +661,8 @@ describe("RAG tools", () => {
   });
 
   describe("git fallbacks", () => {
-    it("searchReviews falls back to git commits when collection throws", async () => {
-      vi.mocked(rawQdrant.search).mockRejectedValue(new Error("collection not found"));
+    it("searchReviews falls back to git commits when collection is empty", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
 
       const result = await executeTool("../mastra/tools/search-reviews.js", {
         query: "recent changes",
@@ -666,8 +675,8 @@ describe("RAG tools", () => {
       expect(results[0].summary).toBe("feat: add auth");
     });
 
-    it("getTestSuggestions falls back to recently changed test files when collection throws", async () => {
-      vi.mocked(rawQdrant.search).mockRejectedValue(new Error("collection not found"));
+    it("getTestSuggestions falls back to recently changed test files when collection is empty", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([]);
 
       const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
         query: "auth tests",

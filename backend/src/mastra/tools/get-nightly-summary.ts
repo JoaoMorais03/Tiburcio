@@ -88,6 +88,9 @@ export async function executeGetNightlySummary(daysBack = 1) {
             `Git activity (last ${safeBack} day${safeBack > 1 ? "s" : ""}): ` +
             `${commits.length} commit(s) by ${authors.join(", ")}. ` +
             `${totalFiles} file(s) changed.`,
+          severityCounts: { info: 0, warning: 0, critical: 0 },
+          criticalItems: [],
+          warningFiles: [],
           recentCommits: commits.slice(0, 10),
           testGaps: testFiles.map((f) => ({ targetFile: f, testType: "unknown" })),
         };

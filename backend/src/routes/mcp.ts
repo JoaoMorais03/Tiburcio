@@ -19,7 +19,7 @@ import { mcpLimiter } from "../middleware/rate-limiter.js";
 const mcpRouter = new Hono<{ Bindings: HttpBindings }>();
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "tiburcio", version: "2.1.0" });
+  const server = new McpServer({ name: "tiburcio", version: "2.2.0" });
   registerTools(server);
   return server;
 }

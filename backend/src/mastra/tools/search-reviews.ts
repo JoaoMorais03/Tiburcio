@@ -7,10 +7,31 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
-import { FALLBACK_NOTICE, getGitCommitSummaries } from "./git-fallback.js";
+import { FALLBACK_NOTICE, getGitCommitSummaries, isCollectionPopulated } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "reviews";
+
+async function tryGitFallback() {
+  const hasData = await isCollectionPopulated(COLLECTION);
+  if (hasData) return null;
+
+  const commits = await getGitCommitSummaries(72).catch(() => []);
+  if (commits.length === 0) return null;
+
+  return {
+    source: "git-log" as const,
+    notice: FALLBACK_NOTICE,
+    results: commits.slice(0, 5).map((c) => ({
+      severity: "info" as const,
+      category: "convention" as const,
+      filePath: `${c.filesChanged} file(s)`,
+      summary: c.message,
+      date: c.date,
+      score: 0,
+    })),
+  };
+}
 
 export async function executeSearchReviews(
   query: string,
@@ -37,6 +58,8 @@ export async function executeSearchReviews(
     });
 
     if (results.length === 0) {
+      const fallback = await tryGitFallback();
+      if (fallback) return fallback;
       return {
         results: [],
         message:
@@ -84,22 +107,6 @@ export async function executeSearchReviews(
     };
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
-    // Fall back to git log when collection doesn't exist
-    const commits = await getGitCommitSummaries(72).catch(() => []);
-    if (commits.length > 0) {
-      return {
-        source: "git-log" as const,
-        notice: FALLBACK_NOTICE,
-        results: commits.slice(0, 5).map((c) => ({
-          severity: "info" as const,
-          category: "change-summary" as const,
-          filePath: `${c.filesChanged} file(s)`,
-          summary: c.message,
-          date: c.date,
-          score: 0,
-        })),
-      };
-    }
     return {
       results: [],
       message: "Reviews collection not yet indexed. The nightly review may not have run yet.",

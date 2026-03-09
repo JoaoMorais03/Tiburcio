@@ -75,17 +75,25 @@ export async function traceToolCall<T>(
 
   try {
     const result = await fn();
-    span.end(recordIO ? { output: result as Record<string, unknown> } : {});
-    trace.update(recordIO ? { output: result as Record<string, unknown> } : {});
+    try {
+      span.end(recordIO ? { output: { data: result } } : {});
+      trace.update(recordIO ? { output: { data: result } } : {});
+    } catch {
+      /* observability must never crash MCP tools */
+    }
     return result;
   } catch (err) {
-    span.end({
-      level: "ERROR",
-      statusMessage: err instanceof Error ? err.message : String(err),
-    });
-    trace.update({
-      metadata: { error: err instanceof Error ? err.message : String(err) },
-    });
+    try {
+      span.end({
+        level: "ERROR",
+        statusMessage: err instanceof Error ? err.message : String(err),
+      });
+      trace.update({
+        metadata: { error: err instanceof Error ? err.message : String(err) },
+      });
+    } catch {
+      /* observability must never crash MCP tools */
+    }
     throw err;
   }
 }

@@ -7,7 +7,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
-import { FALLBACK_NOTICE, getRecentTestFiles } from "./git-fallback.js";
+import { FALLBACK_NOTICE, getRecentTestFiles, isCollectionPopulated } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "test-suggestions";
@@ -36,6 +36,25 @@ export async function executeGetTestSuggestions(
     });
 
     if (results.length === 0) {
+      // Fall back to git when collection is empty (nightly hasn't run yet)
+      const hasData = await isCollectionPopulated(COLLECTION);
+      if (!hasData) {
+        const testFiles = await getRecentTestFiles(72).catch(() => [] as string[]);
+        if (testFiles.length > 0) {
+          return {
+            source: "git-log" as const,
+            notice: FALLBACK_NOTICE,
+            results: testFiles.map((f) => ({
+              suggestion: "Recently changed test file — review for coverage gaps.",
+              targetFile: f,
+              testType: "unknown" as const,
+              language: f.endsWith(".ts") ? "typescript" : f.endsWith(".vue") ? "vue" : "unknown",
+              date: new Date().toISOString().split("T")[0],
+              score: 0,
+            })),
+          };
+        }
+      }
       return {
         results: [],
         message:
@@ -70,22 +89,6 @@ export async function executeGetTestSuggestions(
     };
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
-    // Fall back to listing recently changed test files from git
-    const testFiles = await getRecentTestFiles(72).catch(() => [] as string[]);
-    if (testFiles.length > 0) {
-      return {
-        source: "git-log" as const,
-        notice: FALLBACK_NOTICE,
-        results: testFiles.map((f) => ({
-          suggestion: `Recently changed test file — review for coverage gaps.`,
-          targetFile: f,
-          testType: "unknown" as const,
-          language: f.endsWith(".ts") ? "typescript" : f.endsWith(".vue") ? "vue" : "unknown",
-          date: new Date().toISOString().split("T")[0],
-          score: 0,
-        })),
-      };
-    }
     return {
       results: [],
       message:
