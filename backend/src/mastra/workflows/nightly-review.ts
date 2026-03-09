@@ -283,9 +283,18 @@ async function codeReview(): Promise<{
       const fileDiffs = await getFileDiffs(repo.path, commit.sha, commit.files);
       if (fileDiffs.length === 0) continue;
 
-      const diffSummary = fileDiffs
-        .map((d) => `--- ${d.filePath} ---\n${redactSecrets(d.diff)}`)
-        .join("\n\n");
+      // Cap diff at ~30k tokens (~120k chars) to stay within model context limits.
+      // System prompt + tools schema + metadata use ~8-10k tokens.
+      const MAX_DIFF_CHARS = 120_000;
+      let diffSummary = "";
+      for (const d of fileDiffs) {
+        const entry = `--- ${d.filePath} ---\n${redactSecrets(d.diff)}`;
+        if (diffSummary.length + entry.length > MAX_DIFF_CHARS) {
+          diffSummary += `\n\n[... ${fileDiffs.length - diffSummary.split("---").length / 2} more files truncated — diff too large]`;
+          break;
+        }
+        diffSummary += (diffSummary ? "\n\n" : "") + entry;
+      }
 
       const prompt = `Review this merge commit:
 Repo: ${repo.name}
