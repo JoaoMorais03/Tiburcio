@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml"><img src="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-2.1.0-brightgreen.svg" alt="v2.1.0" /></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-2.2.0-brightgreen.svg" alt="v2.2.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-green.svg" alt="Node.js" /></a>

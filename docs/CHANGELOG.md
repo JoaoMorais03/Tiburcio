@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.2.0] — 2026-03-08
+
+### Added
+- **Langfuse observability**: Traces MCP tool calls, LLM generations, and background jobs. Lazy singleton via `lib/langfuse.ts`. Activated by `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`. `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy.
+- **Git-based fallbacks**: 5 nightly-dependent tools (`searchReviews`, `getTestSuggestions`, `getNightlySummary`, `getChangeSummary`, `getPattern`) now return git history data when Qdrant collections are empty (first boot before nightly runs).
+- **MCP compact mode improvements**: All tools default `compact: true` (300-1,500 tokens). Full mode via `compact: false`.
+- **On-demand nightly**: `POST /api/admin/nightly-review` triggers the nightly pipeline immediately.
+- **8 pattern templates**: `standards/patterns/` directory with ready-to-use scaffolds for common team patterns.
+
+### Changed
+- **MCP HTTP/SSE version** now matches package version (2.2.0).
+- **`isCollectionPopulated`** uses `rawQdrant.count()` instead of `scroll()` for lighter queries.
+- **`getGitCommitSummaries`** processes repos in parallel via `Promise.all`.
+- **`getRecentTestFiles`** uses `Set` for O(1) deduplication.
+- **`sinceToHours`** now correctly parses ISO dates and caps at 90 days.
+
+### Fixed
+- **Langfuse crash safety**: `traceToolCall` wraps all Langfuse calls in try/catch so observability never crashes MCP tools.
+- **Fallback consistency**: `searchReviews` and `getTestSuggestions` now use the same fallback pattern (empty results + `isCollectionPopulated` check) as other nightly tools.
+- **`getNightlySummary` fallback shape**: Fallback response now includes `severityCounts`, `criticalItems`, `warningFiles` with zero/empty defaults to match the normal response shape.
+- **`sinceToHours` silent default**: ISO date inputs no longer silently default to 24 hours.
+
+---
+
 ## [2.1.0] — 2026-03-05
 
 ### Added
