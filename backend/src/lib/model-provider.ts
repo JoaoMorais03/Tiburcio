@@ -19,7 +19,9 @@ export function getChatModel(): LanguageModelV3 {
   if (env.MODEL_PROVIDER === "ollama") {
     return ollama(env.OLLAMA_CHAT_MODEL) as unknown as LanguageModelV3;
   }
-  return createOpenAICompatible()(env.INFERENCE_MODEL ?? "") as unknown as LanguageModelV3;
+  // Use .chat() to force Chat Completions API — openai() defaults to Responses API
+  // in AI SDK v5+, which OpenRouter/vLLM/etc. don't support.
+  return createOpenAICompatible().chat(env.INFERENCE_MODEL ?? "") as unknown as LanguageModelV3;
 }
 
 export function getEmbeddingModel(): EmbeddingModelV3 {
