@@ -105,12 +105,23 @@ app.get("/api/health", async (c) => {
 
   const healthy = checks.database && checks.redis && checks.qdrant;
 
+  // Pipeline health from Redis (non-blocking)
+  let pipeline: { lastRun: string | null; status: string } = { lastRun: null, status: "never" };
+  try {
+    const [lastRun, lastStatus] = await Promise.all([
+      redis.get("tiburcio:nightly:last-run"),
+      redis.get("tiburcio:nightly:last-status"),
+    ]);
+    pipeline = { lastRun, status: lastStatus ?? "never" };
+  } catch {}
+
   // Only return service status and component availability — no internal
   // technology details (model names, providers, etc.) on a public endpoint.
   return c.json(
     {
       status: healthy ? "ok" : "degraded",
       checks,
+      pipeline,
       langfuse: isLangfuseConfigured(),
       timestamp: new Date().toISOString(),
     },

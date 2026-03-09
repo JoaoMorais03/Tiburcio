@@ -56,6 +56,7 @@ docker compose ps              # check service health
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
 - **MCP Annotations**: All 10 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
 - **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, code previews). Full mode via `compact: false`.
+- **Git Fallbacks**: Nightly-dependent tools (`getNightlySummary`, `getChangeSummary`, `searchReviews`, `getTestSuggestions`) fall back to raw `git log` data when Qdrant collections are empty. Responses include `source: "git-log"` field.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
@@ -128,7 +129,7 @@ backend/src/
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # rawQdrant + ensureCollection (no chatModel/embeddingModel — use lib/model-provider.ts)
-  mastra/tools/          # 10 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, get-impact-analysis, etc.)
+  mastra/tools/          # 10 RAG tools + truncate.ts + git-fallback.ts (search-standards, search-code, get-nightly-summary, get-change-summary, get-impact-analysis, etc.)
   mastra/workflows/      # nightly-review.ts (multi-step orchestration via AI SDK generateText)
   jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
   middleware/rate-limiter.ts  # global, auth, chat rate limiters
@@ -149,6 +150,9 @@ backend/src/
 - **Multi-repo indexing**: All repos index into the same `code-chunks` collection with a `repo` metadata field. Chunk IDs include repo name to prevent cross-repo collisions. Per-repo HEAD SHA tracked in Redis as `tiburcio:codebase-head:{repoName}`.
 - **Qdrant healthcheck**: Uses `bash -c ':> /dev/tcp/localhost/6333'` because the qdrant image has no curl/wget.
 - **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_REPOS` later, restart the backend and `code-chunks` will auto-index.
+- **Neo4j auto-build**: After `index-codebase` completes, `buildGraph()` is called automatically when `NEO4J_URI` is configured. No need to wait for the nightly pipeline.
+- **Git fallbacks**: When Qdrant `reviews`/`test-suggestions` collections are empty, nightly-dependent tools fall back to `git log` data from `CODEBASE_REPOS`. Requires repo paths to be accessible at runtime. Fallback responses include `source: "git-log"` and a `notice` field.
+- **Pipeline health tracking**: Nightly pipeline writes `tiburcio:nightly:last-run`, `tiburcio:nightly:last-status`, and `tiburcio:nightly:last-error` to Redis. Exposed in `/api/health` response under `pipeline`.
 - **`.tibignore`**: Place a `.tibignore` file in each repo root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
 - **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending to inference APIs or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
 - **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:qwen/qwen3-embedding-8b`). Re-indexing is triggered automatically.

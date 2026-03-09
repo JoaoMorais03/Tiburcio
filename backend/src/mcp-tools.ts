@@ -163,9 +163,7 @@ export function registerTools(server: McpServer): void {
       inputSchema: {
         query: z.string(),
         severity: z.enum(["info", "warning", "critical"]).optional(),
-        category: z
-          .enum(["convention", "bug", "security", "pattern", "architecture", "change-summary"])
-          .optional(),
+        category: z.enum(["convention", "bug", "security", "pattern", "architecture"]).optional(),
         since: z.string().optional().describe("Only reviews from this date onward (ISO date)"),
         compact: z.boolean().default(true),
       },

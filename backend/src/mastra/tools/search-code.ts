@@ -26,6 +26,7 @@ function mapPointToCompact(p: QdrantPoint) {
     filePath: (m.filePath as string) ?? "unknown",
     symbolName: (m.symbolName as string) ?? null,
     lineRange: `${(m.startLine as number) ?? 0}-${(m.endLine as number) ?? 0}`,
+    layer: (m.layer as string) ?? "other",
     codePreview: truncate(text, 600),
     score: p.score ?? 0,
   };
@@ -265,7 +266,12 @@ export const searchCodeTool = tool({
         "other",
       ])
       .optional()
-      .describe("Filter by architectural layer. For conventions, use searchStandards instead."),
+      .describe(
+        "Filter by architectural layer. Inferred from file path: " +
+          "service=*/services/*, controller=*/routes/*, repository=*/repository/*, " +
+          "model=*/model/*, config=*/config/*, store=*/stores/*, component=*/components/*, " +
+          "batch=*/batch/*. Omit for best results — hybrid search usually finds the right layer.",
+      ),
     compact: z
       .boolean()
       .default(true)

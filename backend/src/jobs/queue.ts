@@ -5,6 +5,8 @@ import { Queue, Worker } from "bullmq";
 
 import { env, getRepoConfigs } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { buildGraph } from "../graph/builder.js";
+import { isGraphAvailable } from "../graph/client.js";
 import { indexArchitecture } from "../indexer/index-architecture.js";
 import { indexCodebase } from "../indexer/index-codebase.js";
 import { indexStandards } from "../indexer/index-standards.js";
@@ -42,6 +44,15 @@ async function runJob(jobName: IndexJobName): Promise<void> {
       if (repos.length === 0) throw new Error("CODEBASE_REPOS not configured");
       for (const repo of repos) {
         await indexCodebase(repo.path, repo.name);
+      }
+      // Auto-build Neo4j graph after indexing (when configured)
+      if (isGraphAvailable()) {
+        try {
+          const { nodes, edges } = await buildGraph(repos);
+          logger.info({ nodes, edges }, "Graph auto-built after codebase indexing");
+        } catch (err) {
+          logger.warn({ err }, "Graph auto-build failed (non-fatal)");
+        }
       }
       break;
     }

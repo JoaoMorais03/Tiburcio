@@ -7,8 +7,35 @@ vi.mock("../indexer/embed.js", () => ({
 }));
 
 vi.mock("../mastra/infra.js", () => ({
-  rawQdrant: { search: vi.fn(), query: vi.fn(), retrieve: vi.fn() },
+  rawQdrant: { search: vi.fn(), query: vi.fn(), retrieve: vi.fn(), scroll: vi.fn() },
 }));
+
+vi.mock("../mastra/tools/git-fallback.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    isCollectionPopulated: vi.fn().mockResolvedValue(false),
+    getGitCommitSummaries: vi.fn().mockResolvedValue([
+      {
+        sha: "abc12345",
+        author: "dev1",
+        date: "2026-03-08",
+        message: "feat: add auth",
+        filesChanged: 3,
+      },
+      {
+        sha: "def67890",
+        author: "dev2",
+        date: "2026-03-07",
+        message: "fix: login bug",
+        filesChanged: 1,
+      },
+    ]),
+    getRecentTestFiles: vi
+      .fn()
+      .mockResolvedValue(["src/__tests__/auth.test.ts", "src/__tests__/chat.test.ts"]),
+  };
+});
 
 vi.mock("../indexer/bm25.js", () => ({
   textToSparse: vi.fn(() => ({ indices: [1, 2], values: [1.0, 1.0] })),
@@ -19,7 +46,7 @@ vi.mock("../config/logger.js", () => ({
 }));
 
 vi.mock("../config/env.js", () => ({
-  env: { EMBEDDING_DIMENSIONS: 3 },
+  env: { EMBEDDING_DIMENSIONS: 3, RETRIEVAL_CONFIDENCE_THRESHOLD: 0.45 },
 }));
 
 vi.mock("node:fs/promises", () => ({
@@ -621,6 +648,64 @@ describe("RAG tools", () => {
       const available = result.availablePatterns as string[];
       expect(available).toContain("new-api-endpoint");
       expect(available).toContain("new-batch-job");
+    });
+  });
+
+  describe("git fallbacks", () => {
+    it("searchReviews falls back to git commits when collection throws", async () => {
+      vi.mocked(rawQdrant.search).mockRejectedValue(new Error("collection not found"));
+
+      const result = await executeTool("../mastra/tools/search-reviews.js", {
+        query: "recent changes",
+      });
+
+      expect(result.source).toBe("git-log");
+      expect(result.notice).toContain("git history");
+      const results = result.results as Record<string, unknown>[];
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].summary).toBe("feat: add auth");
+    });
+
+    it("getTestSuggestions falls back to recently changed test files when collection throws", async () => {
+      vi.mocked(rawQdrant.search).mockRejectedValue(new Error("collection not found"));
+
+      const result = await executeTool("../mastra/tools/get-test-suggestions.js", {
+        query: "auth tests",
+      });
+
+      expect(result.source).toBe("git-log");
+      expect(result.notice).toContain("git history");
+      const results = result.results as Record<string, unknown>[];
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0].targetFile).toBe("src/__tests__/auth.test.ts");
+    });
+
+    it("getNightlySummary falls back to git commit summaries when collections are empty", async () => {
+      vi.mocked(rawQdrant.scroll as ReturnType<typeof vi.fn>).mockResolvedValue({ points: [] });
+
+      const { executeGetNightlySummary } = await import("../mastra/tools/get-nightly-summary.js");
+      const result = await executeGetNightlySummary(1);
+
+      expect(result.source).toBe("git-log");
+      expect(result.notice).toContain("git history");
+      expect(result.summary).toContain("2 commit(s)");
+      expect(result.recentCommits).toHaveLength(2);
+    });
+
+    it("searchStandards returns low-confidence results with flag instead of empty", async () => {
+      vi.mocked(rawQdrant.search).mockResolvedValue([
+        qdrantHit(0.3, { title: "Low Match", text: "Some content", category: "backend", tags: [] }),
+      ] as never);
+
+      const result = await executeTool("../mastra/tools/search-standards.js", {
+        query: "something obscure",
+      });
+
+      expect(result.lowConfidence).toBe(true);
+      expect(result.notice).toContain("low relevance");
+      const results = result.results as Record<string, unknown>[];
+      expect(results).toHaveLength(1);
+      expect(results[0].title).toBe("Low Match");
     });
   });
 });

@@ -343,7 +343,11 @@ ${diffSummary}`;
           }
         }
 
-        try { generation?.end({ output: { notesCount: notes.length } }); } catch { /* observability must never crash nightly pipeline */ }
+        try {
+          generation?.end({ output: { notesCount: notes.length } });
+        } catch {
+          /* observability must never crash nightly pipeline */
+        }
 
         for (const note of notes) {
           allNotes.push({
@@ -447,7 +451,11 @@ Respond with ONLY a test scaffold — the actual test code a developer would use
           abortSignal: AbortSignal.timeout(120_000),
         });
 
-        try { generation?.end({ output: { hasContent: !!text.trim() } }); } catch { /* observability must never crash nightly pipeline */ }
+        try {
+          generation?.end({ output: { hasContent: !!text.trim() } });
+        } catch {
+          /* observability must never crash nightly pipeline */
+        }
 
         if (text.trim()) {
           allSuggestions.push({
@@ -509,9 +517,25 @@ async function buildGraphStep(): Promise<void> {
 // --- Nightly review pipeline ---
 
 export async function runNightlyReview(): Promise<{ suggestions: number }> {
-  await incrementalReindex();
-  const { allCommits } = await codeReview();
-  const { suggestions } = await generateTestSuggestions(allCommits);
-  await buildGraphStep();
-  return { suggestions };
+  try {
+    await incrementalReindex();
+    const { allCommits } = await codeReview();
+    const { suggestions } = await generateTestSuggestions(allCommits);
+    await buildGraphStep();
+
+    // Track pipeline health in Redis
+    await redis.set("tiburcio:nightly:last-run", new Date().toISOString());
+    await redis.set("tiburcio:nightly:last-status", "ok");
+    await redis.del("tiburcio:nightly:last-error");
+
+    return { suggestions };
+  } catch (err) {
+    // Track failure in Redis
+    await redis.set("tiburcio:nightly:last-run", new Date().toISOString()).catch(() => {});
+    await redis.set("tiburcio:nightly:last-status", "failed").catch(() => {});
+    await redis
+      .set("tiburcio:nightly:last-error", err instanceof Error ? err.message : String(err))
+      .catch(() => {});
+    throw err;
+  }
 }
