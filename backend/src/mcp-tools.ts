@@ -7,6 +7,7 @@ import { z } from "zod";
 import { traceToolCall } from "./lib/langfuse.js";
 import { executeGetArchitecture } from "./mastra/tools/get-architecture.js";
 import { executeGetChangeSummary } from "./mastra/tools/get-change-summary.js";
+import { executeGetFileContext } from "./mastra/tools/get-file-context.js";
 import { executeGetImpactAnalysis } from "./mastra/tools/get-impact-analysis.js";
 import { executeGetNightlySummary } from "./mastra/tools/get-nightly-summary.js";
 import { executeGetPattern } from "./mastra/tools/get-pattern.js";
@@ -15,6 +16,7 @@ import { executeSearchCode } from "./mastra/tools/search-code.js";
 import { executeSearchReviews } from "./mastra/tools/search-reviews.js";
 import { executeSearchSchemas } from "./mastra/tools/search-schemas.js";
 import { executeSearchStandards } from "./mastra/tools/search-standards.js";
+import { executeValidateCode } from "./mastra/tools/validate-code.js";
 
 export function registerTools(server: McpServer): void {
   server.registerTool(
@@ -31,7 +33,7 @@ export function registerTools(server: McpServer): void {
         category: z.enum(["backend", "frontend", "database", "integration"]).optional(),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Search Standards", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, category, compact }) => {
       const result = await traceToolCall("searchStandards", { query, category, compact }, () =>
@@ -54,7 +56,7 @@ export function registerTools(server: McpServer): void {
           .optional()
           .describe("Pattern name to retrieve. Omit to list available patterns."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Pattern", readOnlyHint: true, openWorldHint: false },
     },
     async ({ name }) => {
       const result = await traceToolCall("getPattern", { name }, () => executeGetPattern(name));
@@ -100,7 +102,7 @@ export function registerTools(server: McpServer): void {
           .optional(),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Search Code", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, repo, language, layer, compact }) => {
       const result = await traceToolCall(
@@ -123,7 +125,7 @@ export function registerTools(server: McpServer): void {
         area: z.string().optional().describe("Filter by system area"),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Architecture", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, area, compact }) => {
       const result = await traceToolCall("getArchitecture", { query, area, compact }, () =>
@@ -144,7 +146,7 @@ export function registerTools(server: McpServer): void {
         tableName: z.string().optional().describe("Filter by exact table name"),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Search Schemas", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, tableName, compact }) => {
       const result = await traceToolCall("searchSchemas", { query, tableName, compact }, () =>
@@ -167,7 +169,7 @@ export function registerTools(server: McpServer): void {
         since: z.string().optional().describe("Only reviews from this date onward (ISO date)"),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Search Reviews", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, severity, category, since, compact }) => {
       const result = await traceToolCall(
@@ -191,7 +193,7 @@ export function registerTools(server: McpServer): void {
         since: z.string().optional().describe("Only suggestions from this date onward (ISO date)"),
         compact: z.boolean().default(true),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Test Suggestions", readOnlyHint: true, openWorldHint: false },
     },
     async ({ query, language, since, compact }) => {
       const result = await traceToolCall(
@@ -212,7 +214,7 @@ export function registerTools(server: McpServer): void {
       inputSchema: {
         daysBack: z.number().default(1).describe("How many days back to summarize"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Nightly Summary", readOnlyHint: true, openWorldHint: false },
     },
     async ({ daysBack }) => {
       const result = await traceToolCall("getNightlySummary", { daysBack }, () =>
@@ -235,11 +237,61 @@ export function registerTools(server: McpServer): void {
           .describe("How far back: '1d', '3d', '7d', '2w', '1m', or ISO date"),
         area: z.string().optional().describe("Focus on a specific code area"),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Change Summary", readOnlyHint: true, openWorldHint: false },
     },
     async ({ since, area }) => {
       const result = await traceToolCall("getChangeSummary", { since, area }, () =>
         executeGetChangeSummary(since, area),
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    },
+  );
+
+  server.registerTool(
+    "getFileContext",
+    {
+      description:
+        "Get complete development context for a file before modifying it. " +
+        "Returns conventions, recent review findings, and dependency information in one call. " +
+        "CALL THIS FIRST when starting to work on any file. Replaces calling searchStandards + " +
+        "searchReviews individually. Prefer this for file-specific context.",
+      inputSchema: {
+        filePath: z.string().describe("Relative file path, e.g. 'src/mastra/tools/search-code.ts'"),
+        scope: z
+          .enum(["conventions", "reviews", "dependencies", "all"])
+          .default("all")
+          .describe("Which context sections to fetch. Default 'all' fetches everything."),
+      },
+      annotations: { title: "Get File Context", readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ filePath, scope }) => {
+      const result = await traceToolCall("getFileContext", { filePath, scope }, () =>
+        executeGetFileContext(filePath, scope),
+      );
+      return { content: [{ type: "text", text: JSON.stringify(result) }] };
+    },
+  );
+
+  server.registerTool(
+    "validateCode",
+    {
+      description:
+        "Validate code against your team's indexed conventions before committing. " +
+        "Returns structured violations with rule names and descriptions. " +
+        "Use before committing to catch convention issues early. " +
+        "Note: makes an LLM call (~3-5 seconds). For reading conventions without validation, use searchStandards.",
+      inputSchema: {
+        code: z.string().max(10000).describe("The code snippet to validate"),
+        filePath: z
+          .string()
+          .describe("File path for context (determines language and relevant conventions)"),
+        language: z.enum(["java", "typescript", "vue", "sql"]).optional(),
+      },
+      annotations: { title: "Validate Code", readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ code, filePath, language }) => {
+      const result = await traceToolCall("validateCode", { filePath, language }, () =>
+        executeValidateCode(code, filePath, language),
       );
       return { content: [{ type: "text", text: JSON.stringify(result) }] };
     },
@@ -259,7 +311,7 @@ export function registerTools(server: McpServer): void {
         depth: z.number().min(1).max(3).default(2).describe("Traversal depth (1-3)"),
         repo: z.string().optional().describe("Filter by repo name. Omit to search all repos."),
       },
-      annotations: { readOnlyHint: true, openWorldHint: false },
+      annotations: { title: "Get Impact Analysis", readOnlyHint: true, openWorldHint: false },
     },
     async ({ target, targetType, depth, repo }) => {
       const result = await traceToolCall(

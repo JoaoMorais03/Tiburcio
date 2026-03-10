@@ -24,6 +24,15 @@ export function getChatModel(): LanguageModelV3 {
   return createOpenAICompatible().chat(env.INFERENCE_MODEL ?? "") as unknown as LanguageModelV3;
 }
 
+/** Returns the model for nightly code review. Falls back to getChatModel() when REVIEW_MODEL is not set. */
+export function getReviewModel(): LanguageModelV3 {
+  if (!env.REVIEW_MODEL) return getChatModel();
+  if (env.MODEL_PROVIDER === "ollama") {
+    return ollama(env.REVIEW_MODEL) as unknown as LanguageModelV3;
+  }
+  return createOpenAICompatible().chat(env.REVIEW_MODEL) as unknown as LanguageModelV3;
+}
+
 export function getEmbeddingModel(): EmbeddingModelV3 {
   if (env.MODEL_PROVIDER === "ollama") {
     return ollama.embedding(env.OLLAMA_EMBEDDING_MODEL) as unknown as EmbeddingModelV3;

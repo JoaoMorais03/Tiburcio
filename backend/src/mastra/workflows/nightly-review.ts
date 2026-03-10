@@ -5,8 +5,9 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { generateText, stepCountIs } from "ai";
+import { generateText, stepCountIs, tool } from "ai";
 import pLimit from "p-limit";
+import { z } from "zod";
 
 import { getRepoConfigs } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
@@ -29,10 +30,10 @@ import type { ReviewNote } from "../../indexer/index-reviews.js";
 import { indexReviewNotes } from "../../indexer/index-reviews.js";
 import { redactSecrets } from "../../indexer/redact.js";
 import { getLangfuse } from "../../lib/langfuse.js";
-import { getChatModel } from "../../lib/model-provider.js";
+import { getChatModel, getReviewModel } from "../../lib/model-provider.js";
 import { ensureCollection, rawQdrant } from "../infra.js";
-import { searchCodeTool } from "../tools/search-code.js";
-import { searchStandardsTool } from "../tools/search-standards.js";
+import { executeSearchCode } from "../tools/search-code.js";
+import { executeSearchStandards } from "../tools/search-standards.js";
 
 const COLLECTION = "code-chunks";
 const TEST_SUGGESTIONS_COLLECTION = "test-suggestions";
@@ -318,14 +319,31 @@ ${diffSummary}`;
           input: { commitSha: commit.sha, filesChanged: commit.files.length },
         });
 
+        const reviewTools = {
+          searchStandards: tool({
+            description: "Search team coding conventions and best practices",
+            inputSchema: z.object({
+              query: z.string(),
+              compact: z.boolean().default(false),
+            }),
+            execute: ({ query, compact }) => executeSearchStandards(query, undefined, compact),
+          }),
+          searchCode: tool({
+            description: "Search codebase for existing implementations and patterns",
+            inputSchema: z.object({
+              query: z.string(),
+              compact: z.boolean().default(false),
+            }),
+            execute: ({ query, compact }) =>
+              executeSearchCode(query, undefined, undefined, undefined, compact),
+          }),
+        };
+
         const { text } = await generateText({
-          model: getChatModel(),
+          model: getReviewModel(),
           system: CODE_REVIEW_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
-          tools: {
-            searchStandards: searchStandardsTool,
-            searchCode: searchCodeTool,
-          },
+          tools: reviewTools,
           stopWhen: stepCountIs(5),
           abortSignal: AbortSignal.timeout(120_000),
         });

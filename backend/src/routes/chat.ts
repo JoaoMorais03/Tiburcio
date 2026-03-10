@@ -89,6 +89,7 @@ chatRouter.post("/stream", async (c) => {
     .set({ updatedAt: sql`NOW()` })
     .where(eq(conversations.id, conversationId));
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: SSE stream handler with multi-step flow
   return streamSSE(c, async (sseStream) => {
     await sseStream.writeSSE({
       event: "conversation",

@@ -9,6 +9,7 @@ import { logger } from "../../config/logger.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "code-chunks";
@@ -123,6 +124,7 @@ async function fetchHeaders(points: QdrantPoint[]): Promise<Map<string, string>>
   return headerMap;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multiple early returns for cache, thresholds, and compact/full paths
 export async function executeSearchCode(
   query: string,
   repo?: string,
@@ -130,6 +132,11 @@ export async function executeSearchCode(
   layer?: string,
   compact = true,
 ) {
+  const cacheKey = `searchCode:${query}:${repo ?? ""}:${language ?? ""}:${layer ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const t0 = Date.now();
 
   const conditions: Array<{ key: string; match: { value: string } }> = [];
@@ -192,7 +199,9 @@ export async function executeSearchCode(
         { query, embed: tEmbed - t0, search: tSearch - tEmbed, total: Date.now() - t0 },
         "searchCode timing (ms)",
       );
-      return { results };
+      const compactResult = { results };
+      cacheSet(cacheKey, compactResult, 60_000);
+      return compactResult;
     }
 
     const headerMap = await fetchHeaders(points);
@@ -211,7 +220,9 @@ export async function executeSearchCode(
       "searchCode timing (ms)",
     );
 
-    return { results };
+    const fullResult = { results };
+    cacheSet(cacheKey, fullResult, 60_000);
+    return fullResult;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {

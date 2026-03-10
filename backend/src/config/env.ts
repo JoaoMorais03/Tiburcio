@@ -27,6 +27,11 @@ const baseSchema = z.object({
   INFERENCE_MODEL: z.string().optional(),
   INFERENCE_EMBEDDING_MODEL: z.string().optional(),
 
+  // Optional: override the model used for the nightly review pipeline.
+  // When not set, falls back to the same model as OLLAMA_CHAT_MODEL / INFERENCE_MODEL.
+  // Example: REVIEW_MODEL=qwen/qwen3-32b (larger model for better review quality)
+  REVIEW_MODEL: z.string().optional(),
+
   // Embedding vector dimensions: 768 for nomic-embed-text, 4096 for qwen3-embedding-8b.
   // Must match the chosen embedding model. Auto-defaults based on MODEL_PROVIDER.
   EMBEDDING_DIMENSIONS: z.coerce.number().optional(),

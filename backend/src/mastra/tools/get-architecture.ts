@@ -7,11 +7,17 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "architecture";
 
 export async function executeGetArchitecture(query: string, area?: string, compact = true) {
+  const cacheKey = `getArchitecture:${query}:${area ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const embedding = await embedText(query);
 
   const filter = area ? { must: [{ key: "area", match: { value: area } }] } : undefined;
@@ -45,7 +51,7 @@ export async function executeGetArchitecture(query: string, area?: string, compa
       };
     }
 
-    return {
+    const archResult = {
       results: results.map((r) => {
         const text = (r.payload?.text as string) ?? "";
         return {
@@ -57,6 +63,8 @@ export async function executeGetArchitecture(query: string, area?: string, compa
         };
       }),
     };
+    cacheSet(cacheKey, archResult, 300_000);
+    return archResult;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {

@@ -7,6 +7,7 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
 import { FALLBACK_NOTICE, getGitCommitSummaries, isCollectionPopulated } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 
@@ -33,6 +34,7 @@ async function tryGitFallback() {
   };
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multiple filter conditions, cache, fallback, and compact/full paths
 export async function executeSearchReviews(
   query: string,
   severity?: string,
@@ -40,6 +42,11 @@ export async function executeSearchReviews(
   since?: string,
   compact = true,
 ) {
+  const cacheKey = `searchReviews:${query}:${severity ?? ""}:${category ?? ""}:${since ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const embedding = await embedText(query);
 
   const conditions: Array<Record<string, unknown>> = [];
@@ -80,7 +87,7 @@ export async function executeSearchReviews(
     }
 
     if (compact) {
-      return {
+      const compactReviews = {
         results: results.map((r) => ({
           severity: (r.payload?.severity as string) ?? "info",
           category: (r.payload?.category as string) ?? "unknown",
@@ -90,9 +97,11 @@ export async function executeSearchReviews(
           score: r.score ?? 0,
         })),
       };
+      cacheSet(cacheKey, compactReviews, 60_000);
+      return compactReviews;
     }
 
-    return {
+    const fullReviews = {
       results: results.map((r) => ({
         review: truncate((r.payload?.text as string) ?? ""),
         severity: (r.payload?.severity as string) ?? "info",
@@ -105,6 +114,8 @@ export async function executeSearchReviews(
         score: r.score ?? 0,
       })),
     };
+    cacheSet(cacheKey, fullReviews, 60_000);
+    return fullReviews;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {

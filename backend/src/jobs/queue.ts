@@ -11,6 +11,7 @@ import { indexArchitecture } from "../indexer/index-architecture.js";
 import { indexCodebase } from "../indexer/index-codebase.js";
 import { indexStandards } from "../indexer/index-standards.js";
 import { getLangfuse } from "../lib/langfuse.js";
+import { cacheClear } from "../mastra/tools/cache.js";
 import { runNightlyReview } from "../mastra/workflows/nightly-review.js";
 
 export type IndexJobName =
@@ -112,6 +113,7 @@ export function startIndexWorker(): Worker<Record<string, never>, void, IndexJob
       });
       try {
         await runJob(job.name);
+        cacheClear(); // Invalidate in-memory cache after indexing updates data
         trace?.update({ output: { status: "completed" } });
       } catch (err) {
         trace?.update({
