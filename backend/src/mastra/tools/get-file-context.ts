@@ -3,44 +3,12 @@
 
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
+import { detectLanguage, detectLayer } from "./detect.js";
 import { executeGetImpactAnalysis } from "./get-impact-analysis.js";
 import { executeGetPattern } from "./get-pattern.js";
 import { executeSearchStandards } from "./search-standards.js";
 
 const REVIEWS_COLLECTION = "reviews";
-
-/** Derive language from file extension. */
-function detectLanguage(filePath: string): string {
-  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
-  if (ext === "ts" || ext === "tsx") return "typescript";
-  if (ext === "java") return "java";
-  if (ext === "vue") return "vue";
-  if (ext === "sql") return "sql";
-  return "typescript";
-}
-
-const LAYER_PATTERNS: Array<[string[], string]> = [
-  [["/routes/", "/controllers/"], "controller"],
-  [["/services/"], "service"],
-  [["/repository/", "/repositories/"], "repository"],
-  [["/stores/", "/store/"], "store"],
-  [["/components/"], "component"],
-  [["/pages/", "/views/"], "page"],
-  [["/config/"], "config"],
-  [["/model/", "/models/"], "model"],
-  [["/dto/"], "dto"],
-  [["/batch/"], "batch"],
-  [["/composables/"], "composable"],
-];
-
-/** Derive architectural layer from path segments. */
-function detectLayer(filePath: string): string {
-  const lower = filePath.toLowerCase();
-  for (const [patterns, layer] of LAYER_PATTERNS) {
-    if (patterns.some((p) => lower.includes(p))) return layer;
-  }
-  return "other";
-}
 
 /** Extract base filename without extension. */
 function baseName(filePath: string): string {
@@ -75,7 +43,7 @@ export interface FileContextResult {
   recentFindings: ReviewFinding[];
   dependents: DependentsSummary;
   applicablePatterns: string[];
-  indexedAt: string | null;
+  lastReviewedAt: string | null;
   notice?: string;
 }
 
@@ -194,8 +162,8 @@ export async function executeGetFileContext(
     .map((p) => p.name)
     .slice(0, 3);
 
-  // Extract indexedAt from review points if available
-  const indexedAt = reviewPoints.length > 0 ? String(reviewPoints[0]?.payload?.date ?? null) : null;
+  // Most recent review date for this file
+  const lastReviewedAt = recentFindings.length > 0 ? (recentFindings[0]?.date ?? null) : null;
 
   const result: FileContextResult = {
     filePath,
@@ -203,7 +171,7 @@ export async function executeGetFileContext(
     recentFindings,
     dependents,
     applicablePatterns,
-    indexedAt,
+    lastReviewedAt,
   };
 
   if (conventions.length === 0 && recentFindings.length === 0 && !dependents.available) {

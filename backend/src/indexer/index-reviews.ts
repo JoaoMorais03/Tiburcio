@@ -26,6 +26,17 @@ export async function indexReviewNotes(notes: ReviewNote[]): Promise<{ chunks: n
 
   await ensureCollection(COLLECTION);
 
+  // Ensure filePath keyword index exists for efficient getFileContext scroll queries
+  try {
+    await rawQdrant.createPayloadIndex(COLLECTION, {
+      field_name: "filePath",
+      field_schema: "keyword",
+      wait: true,
+    });
+  } catch {
+    // Index already exists — fine
+  }
+
   const embeddings = await embedTexts(notes.map((n) => n.text));
 
   await rawQdrant.upsert(COLLECTION, {

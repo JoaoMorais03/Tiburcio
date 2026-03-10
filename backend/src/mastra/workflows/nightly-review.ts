@@ -269,6 +269,27 @@ async function codeReview(): Promise<{
   const allNotes: ReviewNote[] = [];
   const allCommits: Awaited<ReturnType<typeof getMergeCommits>> = [];
 
+  // Defined once outside the commit loop — tool definitions are stateless
+  const reviewTools = {
+    searchStandards: tool({
+      description: "Search team coding conventions and best practices",
+      inputSchema: z.object({
+        query: z.string(),
+        compact: z.boolean().default(false),
+      }),
+      execute: ({ query, compact }) => executeSearchStandards(query, undefined, compact),
+    }),
+    searchCode: tool({
+      description: "Search codebase for existing implementations and patterns",
+      inputSchema: z.object({
+        query: z.string(),
+        compact: z.boolean().default(false),
+      }),
+      execute: ({ query, compact }) =>
+        executeSearchCode(query, undefined, undefined, undefined, compact),
+    }),
+  };
+
   for (const repo of repos) {
     // Try merge commits first, fall back to all commits
     let commits = await getMergeCommits(repo.path, repo.branch);
@@ -318,26 +339,6 @@ ${diffSummary}`;
           model: "chat",
           input: { commitSha: commit.sha, filesChanged: commit.files.length },
         });
-
-        const reviewTools = {
-          searchStandards: tool({
-            description: "Search team coding conventions and best practices",
-            inputSchema: z.object({
-              query: z.string(),
-              compact: z.boolean().default(false),
-            }),
-            execute: ({ query, compact }) => executeSearchStandards(query, undefined, compact),
-          }),
-          searchCode: tool({
-            description: "Search codebase for existing implementations and patterns",
-            inputSchema: z.object({
-              query: z.string(),
-              compact: z.boolean().default(false),
-            }),
-            execute: ({ query, compact }) =>
-              executeSearchCode(query, undefined, undefined, undefined, compact),
-          }),
-        };
 
         const { text } = await generateText({
           model: getReviewModel(),
