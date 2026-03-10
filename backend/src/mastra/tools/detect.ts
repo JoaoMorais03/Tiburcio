@@ -15,7 +15,9 @@ const LAYER_PATTERNS: Array<[string[], string]> = [
   [["/composables/"], "composable"],
 ];
 
-/** Derive language from file extension. */
+const KNOWN_EXTENSIONS = new Set(["ts", "tsx", "java", "vue", "sql"]);
+
+/** Derive language from file extension. Returns "typescript" as fallback for unknown types. */
 export function detectLanguage(filePath: string): string {
   const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "ts" || ext === "tsx") return "typescript";
@@ -23,6 +25,12 @@ export function detectLanguage(filePath: string): string {
   if (ext === "vue") return "vue";
   if (ext === "sql") return "sql";
   return "typescript";
+}
+
+/** Returns true when the file extension is a supported language — false for config, scripts, etc. */
+export function isKnownLanguage(filePath: string): boolean {
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  return KNOWN_EXTENSIONS.has(ext);
 }
 
 /** Derive architectural layer from path segments. */

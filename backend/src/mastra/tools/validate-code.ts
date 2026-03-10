@@ -27,6 +27,9 @@ interface Violation {
 }
 
 export interface ValidateCodeResult {
+  /** True only when the LLM call completed and the response parsed successfully. */
+  validated: boolean;
+  /** True when validated=true and no critical/warning violations were found. */
   pass: boolean;
   violations: Violation[];
   conventionsChecked: number;
@@ -52,19 +55,23 @@ export async function executeValidateCode(
   } catch (err) {
     logger.warn({ err, filePath }, "validateCode: standards lookup failed");
     return {
+      validated: false,
       pass: true,
       violations: [],
       conventionsChecked: 0,
-      notice: "Could not load standards — skipping validation.",
+      notice:
+        "Could not load standards — validation skipped. Do not treat pass:true as a clean bill.",
     };
   }
 
   if (!standardsResult.results || standardsResult.results.length === 0) {
     return {
+      validated: false,
       pass: true,
       violations: [],
       conventionsChecked: 0,
-      notice: "No conventions indexed yet. Index your standards/ directory first.",
+      notice:
+        "No conventions indexed yet. Index your standards/ directory first. Do not treat pass:true as a clean bill.",
     };
   }
 
@@ -123,6 +130,7 @@ Identify any violations of the team standards above. Respond ONLY with a JSON ar
     );
 
     return {
+      validated: true,
       pass: criticalOrWarning.length === 0,
       violations,
       conventionsChecked: standardsResult.results.length,
@@ -130,10 +138,12 @@ Identify any violations of the team standards above. Respond ONLY with a JSON ar
   } catch (err) {
     logger.error({ err, filePath }, "validateCode: LLM call failed");
     return {
+      validated: false,
       pass: true,
       violations: [],
       conventionsChecked: standardsResult.results.length,
-      notice: "Validation failed — LLM call timed out or errored. Try again.",
+      notice:
+        "Validation failed — LLM call timed out or errored. Do not treat pass:true as a clean bill.",
     };
   }
 }

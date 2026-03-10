@@ -20,13 +20,13 @@ import { executeValidateCode } from "./mastra/tools/validate-code.js";
 
 export const MCP_INSTRUCTIONS = `Tiburcio is a developer intelligence MCP that indexes your team's codebase, conventions, architecture, and review history into a vector database. Use it to get deep context before modifying code.
 
-CALL getFileContext FIRST when starting work on any file. It returns conventions, recent review findings, and dependency information in a single call — faster than calling searchStandards + searchReviews separately.
+Call getFileContext when starting work on an unfamiliar file, a file with known review history, or before any refactor. Skip it for config files, generated files, or trivially small changes you just created. It returns conventions, recent review findings, and dependency information in one call.
 
 TOOL SELECTION GUIDE:
-- getFileContext — call before modifying any file. Best first tool.
+- getFileContext — first tool when working on an unfamiliar or historically problematic file.
 - searchStandards — team conventions and HOW-TO guidance (e.g. "error handling pattern"). Use instead of Grep when looking for documented rules, not exact strings.
 - searchCode — semantic search across the indexed codebase. Use for "how is X implemented?" or cross-file discovery. Use Grep when you already know the exact function name.
-- validateCode — check a snippet against team conventions before committing. Makes an LLM call (~3-5s). Use before committing to catch convention issues.
+- validateCode — check a snippet against team conventions before committing. Makes an LLM call (~3-5s). Check validated:true in the response before trusting pass:true — pass:true alone may mean the check was skipped.
 - getPattern — retrieve boilerplate templates by name (e.g. "new-batch-job"). Call without a name to list all patterns.
 - getArchitecture — system design docs, component flows, and data flows.
 - searchSchemas — database table definitions, columns, and relationships.
@@ -269,16 +269,22 @@ export function registerTools(server: McpServer): void {
     "getFileContext",
     {
       description:
-        "Get complete development context for a file before modifying it. " +
-        "Returns conventions, recent review findings, and dependency information in one call. " +
-        "CALL THIS FIRST when starting to work on any file. Replaces calling searchStandards + " +
-        "searchReviews individually. Prefer this for file-specific context.",
+        "Get development context for a file before modifying it: conventions, recent review findings, and dependency info in one call. " +
+        "Call this when starting work on an unfamiliar file, a file with review history, or before refactoring. " +
+        "Skip for config files, generated files, or trivially small files you just created. " +
+        "Replaces calling searchStandards + searchReviews individually.",
       inputSchema: {
         filePath: z.string().describe("Relative file path, e.g. 'src/mastra/tools/search-code.ts'"),
         scope: z
           .enum(["conventions", "reviews", "dependencies", "all"])
           .default("all")
-          .describe("Which context sections to fetch. Default 'all' fetches everything."),
+          .describe(
+            "Which context sections to fetch. " +
+              "Use 'conventions' (~1s) when you only need naming/pattern guidance. " +
+              "Use 'reviews' (~1s) to check if a file has known past violations before touching it. " +
+              "Use 'dependencies' (~1s) before refactoring to see who imports this file. " +
+              "Use 'all' (default, ~2s) the first time you work on any file.",
+          ),
       },
       annotations: { title: "Get File Context", readOnlyHint: true, openWorldHint: false },
     },
@@ -295,8 +301,9 @@ export function registerTools(server: McpServer): void {
     {
       description:
         "Validate code against your team's indexed conventions before committing. " +
-        "Returns structured violations with rule names and descriptions. " +
-        "Use before committing to catch convention issues early. " +
+        "Returns { validated, pass, violations[] }. " +
+        "IMPORTANT: Check validated:true before trusting pass:true — when validated:false, " +
+        "the check was skipped (empty standards collection or LLM error) and pass:true means nothing. " +
         "Note: makes an LLM call (~3-5 seconds). For reading conventions without validation, use searchStandards.",
       inputSchema: {
         code: z.string().max(10000).describe("The code snippet to validate"),

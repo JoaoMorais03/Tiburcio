@@ -3,7 +3,7 @@
 
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
-import { detectLanguage, detectLayer } from "./detect.js";
+import { detectLanguage, detectLayer, isKnownLanguage } from "./detect.js";
 import { executeGetImpactAnalysis } from "./get-impact-analysis.js";
 import { executeGetPattern } from "./get-pattern.js";
 import { executeSearchStandards } from "./search-standards.js";
@@ -45,6 +45,37 @@ export interface FileContextResult {
   applicablePatterns: string[];
   lastReviewedAt: string | null;
   notice?: string;
+}
+
+function mapDependents(result: unknown): DependentsSummary {
+  if (
+    typeof result !== "object" ||
+    result === null ||
+    (result as { available: unknown }).available !== true ||
+    !("dependents" in result)
+  ) {
+    return { available: false, directImporters: [], total: 0 };
+  }
+  const deps = (result as { dependents: Array<{ file: string; depth: number }> }).dependents;
+  const directImporters = deps
+    .filter((d) => d.depth === 1)
+    .map((d) => d.file)
+    .slice(0, 5);
+  return { available: true, directImporters, total: deps.length };
+}
+
+function filterPatterns(result: unknown, language: string, layer: string, name: string): string[] {
+  const list =
+    typeof result === "object" && result !== null && "patterns" in result
+      ? (result as { patterns: Array<{ name: string; title: string }> }).patterns
+      : [];
+  return list
+    .filter((p) => {
+      const combined = `${p.name} ${p.title}`.toLowerCase();
+      return combined.includes(language) || combined.includes(layer) || combined.includes(name);
+    })
+    .map((p) => p.name)
+    .slice(0, 3);
 }
 
 export async function executeGetFileContext(
@@ -129,38 +160,9 @@ export async function executeGetFileContext(
       date: String(p.payload?.date ?? ""),
     }));
 
-  // Map dependents
-  let dependents: DependentsSummary = { available: false, directImporters: [], total: 0 };
-  if (dependentsResult.available === true && "dependents" in dependentsResult) {
-    const deps = (
-      dependentsResult as {
-        available: true;
-        dependents: Array<{ file: string; depth: number }>;
-      }
-    ).dependents;
-    const directImporters = deps
-      .filter((d) => d.depth === 1)
-      .map((d) => d.file)
-      .slice(0, 5);
-    dependents = { available: true, directImporters, total: deps.length };
-  }
-
-  // Filter patterns by language/layer relevance using simple string matching
-  const patternsList =
-    "patterns" in patternsResult
-      ? (patternsResult as { patterns: Array<{ name: string; title: string }> }).patterns
-      : [];
-  const applicablePatterns = patternsList
-    .filter((p) => {
-      const combined = `${p.name} ${p.title}`.toLowerCase();
-      return (
-        combined.includes(language) ||
-        combined.includes(layer) ||
-        combined.includes(name.toLowerCase())
-      );
-    })
-    .map((p) => p.name)
-    .slice(0, 3);
+  // Map dependents and patterns using extracted helpers
+  const dependents = mapDependents(dependentsResult);
+  const applicablePatterns = filterPatterns(patternsResult, language, layer, name.toLowerCase());
 
   // Most recent review date for this file
   const lastReviewedAt = recentFindings.length > 0 ? (recentFindings[0]?.date ?? null) : null;
@@ -175,8 +177,9 @@ export async function executeGetFileContext(
   };
 
   if (conventions.length === 0 && recentFindings.length === 0 && !dependents.available) {
-    result.notice =
-      "No indexed context found for this file yet. Run the indexing pipeline to populate Tiburcio's knowledge base.";
+    result.notice = !isKnownLanguage(filePath)
+      ? `File type not recognised (defaulted to 'typescript' conventions). Tiburcio supports .ts/.tsx/.java/.vue/.sql — conventions may not apply to this file.`
+      : "No indexed context found for this file yet. Run the indexing pipeline to populate Tiburcio's knowledge base.";
   }
 
   return result;
