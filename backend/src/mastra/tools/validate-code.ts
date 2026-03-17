@@ -26,6 +26,35 @@ interface Violation {
   severity: "info" | "warning" | "critical";
 }
 
+function isViolation(v: unknown): v is Violation {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    typeof (v as Record<string, unknown>).rule === "string" &&
+    typeof (v as Record<string, unknown>).description === "string" &&
+    ["info", "warning", "critical"].includes((v as Record<string, unknown>).severity as string)
+  );
+}
+
+/** Parse violations from raw LLM text, handling JSON fences and bare arrays. */
+function parseViolations(text: string): Violation[] {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return (Array.isArray(parsed) ? parsed : []).filter(isViolation);
+  } catch {
+    const fenceMatch = text.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
+    const bareMatch = text.match(/\[[\s\S]*\]/);
+    const raw = fenceMatch?.[1] ?? bareMatch?.[0];
+    if (!raw) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return (Array.isArray(parsed) ? parsed : []).filter(isViolation);
+    } catch {
+      return [];
+    }
+  }
+}
+
 export interface ValidateCodeResult {
   /** True only when the LLM call completed and the response parsed successfully. */
   validated: boolean;
@@ -104,26 +133,13 @@ Identify any violations of the team standards above. Respond ONLY with a JSON ar
       abortSignal: AbortSignal.timeout(30_000),
     });
 
-    let violations: Violation[] = [];
-    try {
-      violations = JSON.parse(text);
-    } catch {
-      // Try to extract JSON from fences or bare array
-      const fenceMatch = text.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
-      const bareMatch = text.match(/\[[\s\S]*\]/);
-      const raw = fenceMatch?.[1] ?? bareMatch?.[0];
-      if (raw) {
-        try {
-          violations = JSON.parse(raw);
-        } catch {
-          logger.warn({ filePath }, "validateCode: could not parse LLM response as JSON");
-          violations = [];
-        }
-      }
+    let violations = parseViolations(text);
+    if (violations.length === 0 && text.trim() !== "[]") {
+      logger.warn({ filePath }, "validateCode: could not parse LLM response as JSON");
     }
 
-    // Ensure violations is an array
-    if (!Array.isArray(violations)) violations = [];
+    // Cap description length to prevent oversized payloads
+    violations = violations.map((v) => ({ ...v, description: v.description.slice(0, 500) }));
 
     const criticalOrWarning = violations.filter(
       (v) => v.severity === "critical" || v.severity === "warning",
