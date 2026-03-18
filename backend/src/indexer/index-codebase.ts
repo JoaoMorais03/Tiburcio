@@ -2,8 +2,8 @@
 // v1.2: Per-file pipeline with p-limit concurrency — chunk, contextualize, embed, upsert per file.
 // Data appears in Qdrant immediately. Crash-recoverable. ~3x faster than sequential.
 
-import { readdir, readFile, stat } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { readFile, stat } from "node:fs/promises";
+import { relative } from "node:path";
 
 import pLimit from "p-limit";
 
@@ -14,6 +14,7 @@ import { textToSparse } from "./bm25.js";
 import { chunkFile } from "./chunker.js";
 import { contextualizeChunks } from "./contextualize.js";
 import { contentHash, embedTexts, enrichChunkForEmbedding, toUUID } from "./embed.js";
+import { findSourceFiles, loadTibignorePatterns } from "./fs.js";
 import { getHeadSha } from "./git-diff.js";
 import { redactSecrets } from "./redact.js";
 
@@ -37,109 +38,6 @@ async function withRetry<T>(fn: () => Promise<T>, label: string, filePath: strin
     }
   }
   throw new Error("unreachable");
-}
-
-const SKIP_DIRS = new Set([
-  "node_modules",
-  ".git",
-  "target",
-  "build",
-  "dist",
-  ".idea",
-  ".mvn",
-  ".vscode",
-  ".claude",
-  "cicd",
-  "docs",
-  "test",
-  "__tests__",
-  "cypress",
-]);
-const SOURCE_EXTENSIONS = new Set([".java", ".vue", ".ts", ".tsx", ".sql"]);
-
-// Blocked file patterns to prevent secret leaks
-const BLOCKED_FILE_PATTERNS = [
-  /\.config\.(ts|js|mjs|cjs)$/,
-  /\.env(\..+)?$/,
-  /docker-compose.*\.ya?ml$/,
-  /Dockerfile/,
-  /secrets?\.(ts|js|json|ya?ml)$/,
-  /credentials?\.(ts|js|json)$/,
-];
-
-// Blocked path segments to skip risky directories
-const BLOCKED_PATH_SEGMENTS = new Set([
-  "resources",
-  "environments",
-  "env",
-  "config",
-  ".github",
-  ".gitlab",
-  "terraform",
-  "helm",
-  "k8s",
-  "kubernetes",
-  "ansible",
-]);
-
-function isFileBlocked(filename: string, relativePath: string): boolean {
-  if (BLOCKED_FILE_PATTERNS.some((pattern) => pattern.test(filename))) return true;
-  return relativePath.split("/").some((part) => BLOCKED_PATH_SEGMENTS.has(part));
-}
-
-async function loadTibignorePatterns(codebasePath: string): Promise<RegExp[]> {
-  try {
-    const tibignorePath = join(codebasePath, ".tibignore");
-    const content = await readFile(tibignorePath, "utf-8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .map((pattern) => {
-        // Convert simple glob patterns to regex
-        const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-        const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-        return new RegExp(`^${regex}$`);
-      });
-  } catch {
-    return [];
-  }
-}
-
-async function findSourceFiles(
-  dir: string,
-  codebasePath: string,
-  tibignorePatterns: RegExp[],
-): Promise<string[]> {
-  const files: string[] = [];
-  let entries: import("node:fs").Dirent[] | undefined;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const fullPath = join(dir, entry.name);
-    const relPath = relative(codebasePath, fullPath);
-
-    if (tibignorePatterns.some((pattern) => pattern.test(relPath))) {
-      logger.debug({ path: relPath }, "Skipped by .tibignore");
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      files.push(...(await findSourceFiles(fullPath, codebasePath, tibignorePatterns)));
-    } else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name))) {
-      if (isFileBlocked(entry.name, relPath)) {
-        logger.debug({ path: relPath }, "Skipped blocked file");
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
-  return files;
 }
 
 function chunkId(repoName: string, filePath: string, startLine: number): string {
@@ -305,7 +203,9 @@ export async function indexCodebase(
     logger.info({ patterns: tibignorePatterns.length }, "Loaded .tibignore patterns");
   }
 
-  const sourceFiles = await findSourceFiles(codebasePath, codebasePath, tibignorePatterns);
+  const sourceFiles = await findSourceFiles(codebasePath, codebasePath, tibignorePatterns, {
+    checkBlocked: true,
+  });
   if (sourceFiles.length === 0) return { files: 0, chunks: 0 };
 
   // Create collection FIRST so upserts work immediately

@@ -1,6 +1,9 @@
 // tools/get-file-context.ts — Aggregate context bundle for a file before modifying it.
 // Runs conventions, review findings, and dependency lookups in parallel.
 
+import { tool } from "ai";
+import { z } from "zod";
+
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
 import { detectLanguage, detectLayer, isKnownLanguage } from "./detect.js";
@@ -184,3 +187,17 @@ export async function executeGetFileContext(
 
   return result;
 }
+
+export const getFileContextTool = tool({
+  description:
+    "Get development context for a file before modifying it: conventions, recent review findings, and dependency info in one call. " +
+    "Call this when starting work on an unfamiliar file or before refactoring.",
+  inputSchema: z.object({
+    filePath: z.string().describe("Relative file path, e.g. 'src/mastra/tools/search-code.ts'"),
+    scope: z
+      .enum(["conventions", "reviews", "dependencies", "all"])
+      .default("all")
+      .describe("Which context sections to fetch"),
+  }),
+  execute: ({ filePath, scope }) => executeGetFileContext(filePath, scope),
+});

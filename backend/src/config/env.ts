@@ -52,7 +52,10 @@ const baseSchema = z.object({
 
   // Bearer token for MCP HTTP/SSE transport authentication.
   // Required when exposing MCP over HTTP for team deployment.
-  TEAM_API_KEY: z.string().optional(),
+  TEAM_API_KEY: z
+    .string()
+    .min(32, "TEAM_API_KEY must be at least 32 characters (use: openssl rand -base64 32)")
+    .optional(),
 
   // Retrieval confidence thresholds — filter low-relevance results before returning to Claude
   RETRIEVAL_CONFIDENCE_THRESHOLD: z.coerce.number().default(0.45),

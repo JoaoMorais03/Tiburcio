@@ -1,7 +1,8 @@
 // tools/validate-code.ts — Validate a code snippet against team conventions via LLM.
 // Uses indexed standards as the source of truth — not generic best practices.
 
-import { generateText } from "ai";
+import { generateText, tool } from "ai";
+import { z } from "zod";
 
 import { logger } from "../../config/logger.js";
 import { redactSecrets } from "../../indexer/redact.js";
@@ -37,7 +38,7 @@ function isViolation(v: unknown): v is Violation {
 }
 
 /** Parse violations from raw LLM text, handling JSON fences and bare arrays. */
-function parseViolations(text: string): Violation[] {
+export function parseViolations(text: string): Violation[] {
   try {
     const parsed: unknown = JSON.parse(text);
     return (Array.isArray(parsed) ? parsed : []).filter(isViolation);
@@ -163,3 +164,18 @@ Identify any violations of the team standards above. Respond ONLY with a JSON ar
     };
   }
 }
+
+export const validateCodeTool = tool({
+  description:
+    "Validate code against your team's indexed conventions before committing. " +
+    "Returns { validated, pass, violations[] }. " +
+    "Check validated:true before trusting pass:true.",
+  inputSchema: z.object({
+    code: z.string().max(10000).describe("The code snippet to validate"),
+    filePath: z
+      .string()
+      .describe("File path for context (determines language and relevant conventions)"),
+    language: z.enum(["java", "typescript", "vue", "sql"]).optional(),
+  }),
+  execute: ({ code, filePath, language }) => executeValidateCode(code, filePath, language),
+});

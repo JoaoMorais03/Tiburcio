@@ -25,6 +25,9 @@ frontend/auto-imports.d.ts
 frontend/components.d.ts
 frontend/stats.html
 
+# Development artifacts
+todos/
+
 # Claude Code — commit settings.json + CLAUDE.md, ignore local/personal files
 .claude/settings.local.json
 .claude/projects/

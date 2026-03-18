@@ -13,6 +13,7 @@ import { logger } from "../config/logger.js";
 import { redis } from "../config/redis.js";
 import { db } from "../db/connection.js";
 import { users } from "../db/schema.js";
+import { setCsrfCookie } from "../middleware/csrf.js";
 
 const authRouter = new Hono();
 
@@ -88,6 +89,7 @@ authRouter.post("/register", async (c) => {
   const [user] = await db.insert(users).values({ username, passwordHash }).returning();
 
   await issueTokens(c, user.id, user.username);
+  setCsrfCookie(c);
 
   logger.info({ username: user.username }, "User registered");
   return c.json({ user: { id: user.id, username: user.username } });
@@ -114,6 +116,7 @@ authRouter.post("/login", async (c) => {
   }
 
   await issueTokens(c, user.id, user.username);
+  setCsrfCookie(c);
 
   logger.info({ username: user.username }, "User logged in");
   return c.json({ user: { id: user.id, username: user.username } });
@@ -144,6 +147,7 @@ authRouter.post("/refresh", async (c) => {
     // Rotate: delete old jti, issue new pair
     await redis.del(`refresh:${jti}`);
     await issueTokens(c, payload.sub as string, payload.username as string);
+    setCsrfCookie(c);
 
     return c.json({ user: { id: payload.sub, username: payload.username } });
   } catch {

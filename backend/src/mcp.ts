@@ -4,11 +4,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
+import { VERSION } from "./config/version.js";
 import { shutdownLangfuse } from "./lib/langfuse.js";
 import { MCP_INSTRUCTIONS, registerTools } from "./mcp-tools.js";
 
 const server = new McpServer(
-  { name: "tiburcio", version: "2.2.0" },
+  { name: "tiburcio", version: VERSION },
   { instructions: MCP_INSTRUCTIONS },
 );
 

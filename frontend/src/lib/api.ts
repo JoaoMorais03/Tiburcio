@@ -3,6 +3,12 @@
 
 import { toast } from "vue-sonner";
 
+/** Read a cookie value by name from document.cookie. */
+function getCookie(name: string): string | undefined {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : undefined;
+}
+
 let isRefreshing = false;
 let refreshPromise: Promise<boolean> | null = null;
 
@@ -11,9 +17,11 @@ async function silentRefresh(): Promise<boolean> {
   if (isRefreshing && refreshPromise) return refreshPromise;
 
   isRefreshing = true;
+  const refreshCsrf = getCookie("csrf-token");
   refreshPromise = fetch("/api/auth/refresh", {
     method: "POST",
     credentials: "include",
+    headers: refreshCsrf ? { "X-CSRF-Token": refreshCsrf } : undefined,
   })
     .then((res) => res.ok)
     .catch(() => false)
@@ -26,13 +34,25 @@ async function silentRefresh(): Promise<boolean> {
 }
 
 export async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const res = await fetch(url, { ...options, credentials: "include" });
+  const csrfToken = getCookie("csrf-token");
+  const headers = new Headers(options.headers);
+  if (csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
+
+  const res = await fetch(url, { ...options, headers, credentials: "include" });
 
   if (res.status === 401) {
     // Try silent refresh before giving up
     const refreshed = await silentRefresh();
     if (refreshed) {
-      return fetch(url, { ...options, credentials: "include" });
+      // Re-read CSRF token — refresh response sets a new one
+      const newCsrfToken = getCookie("csrf-token");
+      const retryHeaders = new Headers(options.headers);
+      if (newCsrfToken) {
+        retryHeaders.set("X-CSRF-Token", newCsrfToken);
+      }
+      return fetch(url, { ...options, headers: retryHeaders, credentials: "include" });
     }
 
     // Refresh failed — clear session and redirect

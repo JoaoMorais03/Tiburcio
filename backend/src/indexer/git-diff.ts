@@ -43,17 +43,18 @@ export async function getHeadSha(repoPath: string): Promise<string> {
   return stdout.trim();
 }
 
-/** Get merge commits to a branch in the last N hours. */
-export async function getMergeCommits(
+/** Shared implementation for fetching commits with optional --merges flag. */
+async function getCommits(
   repoPath: string,
   branch: string,
-  sinceHours = 24,
+  sinceHours: number,
+  mergesOnly: boolean,
 ): Promise<MergeCommit[]> {
-  const { stdout } = await exec(
-    "git",
-    ["log", `--since=${sinceHours} hours ago`, "--merges", "--pretty=format:%H|%an|%aI|%s", branch],
-    { cwd: repoPath },
-  );
+  const args = ["log", `--since=${sinceHours} hours ago`];
+  if (mergesOnly) args.push("--merges");
+  args.push("--pretty=format:%H|%an|%aI|%s", branch);
+
+  const { stdout } = await exec("git", args, { cwd: repoPath });
 
   if (!stdout.trim()) return [];
 
@@ -82,6 +83,15 @@ export async function getMergeCommits(
   }
 
   return commits;
+}
+
+/** Get merge commits to a branch in the last N hours. */
+export async function getMergeCommits(
+  repoPath: string,
+  branch: string,
+  sinceHours = 24,
+): Promise<MergeCommit[]> {
+  return getCommits(repoPath, branch, sinceHours, true);
 }
 
 /** Get the diff content for specific files from a merge commit. */
@@ -136,37 +146,5 @@ export async function getRecentCommits(
   branch: string,
   sinceHours = 24,
 ): Promise<MergeCommit[]> {
-  const { stdout } = await exec(
-    "git",
-    ["log", `--since=${sinceHours} hours ago`, "--pretty=format:%H|%an|%aI|%s", branch],
-    { cwd: repoPath },
-  );
-
-  if (!stdout.trim()) return [];
-
-  const commits: MergeCommit[] = [];
-
-  for (const line of stdout.trim().split("\n")) {
-    const [sha, author, date, ...messageParts] = line.split("|");
-    if (!sha) continue;
-
-    const { stdout: filesOut } = await exec(
-      "git",
-      ["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-      { cwd: repoPath },
-    );
-
-    commits.push({
-      sha,
-      author,
-      date,
-      message: messageParts.join("|"),
-      files: filesOut
-        .split("\n")
-        .map((f: string) => f.trim())
-        .filter(Boolean),
-    });
-  }
-
-  return commits;
+  return getCommits(repoPath, branch, sinceHours, false);
 }

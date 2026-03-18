@@ -1,6 +1,6 @@
 # Tiburcio — Claude Code Configuration
 
-Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 10 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
+Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 12 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
 
 ## Philosophy
 
@@ -54,7 +54,7 @@ docker compose ps              # check service health
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
-- **MCP Annotations**: All 10 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
+- **MCP Annotations**: All 12 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
 - **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, code previews). Full mode via `compact: false`.
 - **Git Fallbacks**: Nightly-dependent tools (`getNightlySummary`, `getChangeSummary`, `searchReviews`, `getTestSuggestions`) fall back to raw `git log` data when Qdrant collections are empty. Responses include `source: "git-log"` field.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
@@ -64,6 +64,9 @@ docker compose ps              # check service health
 - **Observability**: Langfuse (`lib/langfuse.ts`) — lazy singleton, traces MCP tool calls, LLM generations (embeddings, contextualization, nightly review, chat), and background jobs. Activated by setting `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`. `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy.
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
 - **MCP**: stdio transport (`backend/src/mcp.ts`) + HTTP/SSE transport (`backend/src/routes/mcp.ts`, Bearer auth via `TEAM_API_KEY`)
+- **MCP Instructions**: Auto-injected tool selection guide via MCP Instructions field in `mcp-tools.ts`
+- **Response Caching**: In-memory TTL cache (`mastra/tools/cache.ts`) — 300s for standards/arch/schemas, 60s for code/reviews
+- **Review Model**: Optional `REVIEW_MODEL` env var + `getReviewModel()` for higher-quality nightly reviews
 
 ## Key Patterns
 
@@ -71,7 +74,7 @@ docker compose ps              # check service health
 All shared singletons live in `backend/src/mastra/infra.ts`: `rawQdrant` (Qdrant client for all vector ops), `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
 
 ### Provider-agnostic model layer
-`backend/src/lib/model-provider.ts` exports `getChatModel()` and `getEmbeddingModel()`. Set `MODEL_PROVIDER=ollama` (default) or `MODEL_PROVIDER=openai-compatible` in env. Ollama uses `ollama-ai-provider`. OpenAI-compatible uses `@ai-sdk/openai` createOpenAI (works with vLLM, OpenRouter, LM Studio, etc.). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
+`backend/src/lib/model-provider.ts` exports `getChatModel()`, `getReviewModel()`, and `getEmbeddingModel()`. Set `MODEL_PROVIDER=ollama` (default) or `MODEL_PROVIDER=openai-compatible` in env. Ollama uses `ollama-ai-provider`. OpenAI-compatible uses `@ai-sdk/openai` createOpenAI (works with vLLM, OpenRouter, LM Studio, etc.). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
 
 ### One Qdrant client
 - `rawQdrant` — `@qdrant/js-client-rest` `QdrantClient` for all operations: simple search, sparse vectors, hybrid queries (prefetch + RRF), and point retrieval. All 6 collections use `rawQdrant` directly.
@@ -114,7 +117,7 @@ backend/src/
   config/logger.ts       # Pino logger
   config/redis.ts        # ioredis client
   lib/langfuse.ts        # Langfuse singleton (getLangfuse, shutdownLangfuse, traceToolCall)
-  lib/model-provider.ts  # getChatModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
+  lib/model-provider.ts  # getChatModel() + getReviewModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
   db/schema.ts           # Drizzle schema (users, conversations, messages)
   db/connection.ts       # postgres driver + drizzle instance
   db/migrate.ts          # Drizzle migrator
@@ -129,7 +132,7 @@ backend/src/
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # rawQdrant + ensureCollection (no chatModel/embeddingModel — use lib/model-provider.ts)
-  mastra/tools/          # 10 RAG tools + truncate.ts + git-fallback.ts (search-standards, search-code, get-nightly-summary, get-change-summary, get-impact-analysis, etc.)
+  mastra/tools/          # 12 RAG tools + truncate.ts + git-fallback.ts + cache.ts + detect.ts (search-standards, search-code, get-file-context, validate-code, get-impact-analysis, etc.)
   mastra/workflows/      # nightly-review.ts (multi-step orchestration via AI SDK generateText)
   jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
   middleware/rate-limiter.ts  # global, auth, chat rate limiters
@@ -138,7 +141,7 @@ backend/src/
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
   routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
-  mcp.ts                 # MCP stdio server (10 tools via @modelcontextprotocol/sdk)
+  mcp.ts                 # MCP stdio server (12 tools via @modelcontextprotocol/sdk)
 ```
 
 ## Gotchas
@@ -173,7 +176,7 @@ backend/src/
 - **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
 - **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
 - **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses `SSEServerTransport` from `@modelcontextprotocol/sdk`.
-- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both use `SSEServerTransport` (HTTP/SSE) and `StdioServerTransport` (stdio) respectively, and call the shared `registerTools(server)` from `src/mcp-tools.ts`. Both expose the same 10 tools.
+- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both use `SSEServerTransport` (HTTP/SSE) and `StdioServerTransport` (stdio) respectively, and call the shared `registerTools(server)` from `src/mcp-tools.ts`. Both expose the same 12 tools.
 - **AI SDK v6 tools**: Tools use `inputSchema:` (not `parameters:`). Import `z` from `"zod"` (v3), not `"zod/v4"` — AI SDK v6's `FlexibleSchema` requires Zod v3 types. Each tool file exports both `executeFoo()` (standalone async fn) and `fooTool` (AI SDK tool object).
 - **`stopWhen: stepCountIs(N)`**: AI SDK v6 replaced `maxSteps: N` with `stopWhen: stepCountIs(N)` imported from `"ai"`.
 
@@ -197,4 +200,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v2.2.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v2.3.0 — version defined in `backend/package.json`, read at runtime via `config/version.ts`. All entry points (`server.ts`, `mcp.ts`, `routes/mcp.ts`) import `VERSION` from there.

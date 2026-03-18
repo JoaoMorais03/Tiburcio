@@ -1,6 +1,15 @@
 {
   "name": "tiburcio-frontend",
-  "version": "2.2.0",
+  "version": "2.3.0",
+  "description": "Tiburcio frontend — Vue 3 chat UI for developer intelligence",
+  "author": "Joao Morais",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoaoMorais03/tiburcio.git",
+    "directory": "frontend"
+  },
+  "keywords": ["vue", "chat-ui", "developer-tools"],
   "type": "module",
   "engines": {
     "node": ">=22.0.0",

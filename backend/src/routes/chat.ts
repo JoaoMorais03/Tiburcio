@@ -15,6 +15,8 @@ import { getLangfuse } from "../lib/langfuse.js";
 import { getChatModel } from "../lib/model-provider.js";
 import { getArchitectureTool } from "../mastra/tools/get-architecture.js";
 import { getChangeSummaryTool } from "../mastra/tools/get-change-summary.js";
+import { getFileContextTool } from "../mastra/tools/get-file-context.js";
+import { getImpactAnalysisTool } from "../mastra/tools/get-impact-analysis.js";
 import { getNightlySummaryTool } from "../mastra/tools/get-nightly-summary.js";
 import { getPatternTool } from "../mastra/tools/get-pattern.js";
 import { getTestSuggestionsTool } from "../mastra/tools/get-test-suggestions.js";
@@ -22,6 +24,7 @@ import { searchCodeTool } from "../mastra/tools/search-code.js";
 import { searchReviewsTool } from "../mastra/tools/search-reviews.js";
 import { searchSchemasTool } from "../mastra/tools/search-schemas.js";
 import { searchStandardsTool } from "../mastra/tools/search-standards.js";
+import { validateCodeTool } from "../mastra/tools/validate-code.js";
 
 const MAX_RESPONSE_SIZE = 100_000; // 100KB max accumulated response
 
@@ -39,7 +42,10 @@ BEHAVIOR:
 7. When asked about recent changes, what merged, or what happened recently -> use searchReviews.
 8. When asked to write tests, test recently changed code, or "test yesterday's merges" -> use getTestSuggestions AND searchReviews to understand what changed, then use searchCode to find existing test patterns.
 9. When asked "what did I miss?", "what changed this week/month?", or catching up after time away -> use getChangeSummary.
-10. For greetings or casual messages, respond warmly and briefly, then ask how you can help with onboarding.
+10. When starting work on an unfamiliar file or before refactoring -> use getFileContext to get conventions, review history, and dependencies in one call.
+11. When asked to validate code against team conventions -> use validateCode. Always check validated:true before trusting pass:true.
+12. When asked about blast radius or impact of refactoring a file/class/function -> use getImpactAnalysis (requires Neo4j).
+13. For greetings or casual messages, respond warmly and briefly, then ask how you can help with onboarding.
 11. If a question spans multiple areas, call multiple tools to build a complete answer.
 12. For ambiguous questions, ask a clarifying question before searching.
 
@@ -136,6 +142,9 @@ chatRouter.post("/stream", async (c) => {
           getTestSuggestions: getTestSuggestionsTool,
           getNightlySummary: getNightlySummaryTool,
           getChangeSummary: getChangeSummaryTool,
+          getFileContext: getFileContextTool,
+          validateCode: validateCodeTool,
+          getImpactAnalysis: getImpactAnalysisTool,
         },
         stopWhen: stepCountIs(10),
         abortSignal: c.req.raw.signal,

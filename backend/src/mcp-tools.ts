@@ -34,7 +34,11 @@ TOOL SELECTION GUIDE:
 - getTestSuggestions — AI-generated test scaffolds for recently changed files.
 - getNightlySummary — morning briefing of what changed overnight.
 - getChangeSummary — catch up after time away ("what changed this week?").
-- getImpactAnalysis — blast radius before refactoring (requires NEO4J_URI).`;
+- getImpactAnalysis — blast radius before refactoring (requires NEO4J_URI).
+
+All search tools default to compact:true (3 results, truncated). Set compact:false for full results when initial results are insufficient.
+
+If a response includes source:'git-log', the nightly pipeline hasn't run yet — results are raw git data, not AI-reviewed.`;
 
 export function registerTools(server: McpServer): void {
   server.registerTool(

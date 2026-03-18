@@ -51,6 +51,25 @@ vi.mock("../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
+vi.mock("ai", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, generateText: vi.fn() };
+});
+
+vi.mock("../lib/model-provider.js", () => ({
+  getChatModel: vi.fn(() => ({})),
+  getEmbeddingModel: vi.fn(() => ({})),
+  getReviewModel: vi.fn(() => ({})),
+}));
+
+vi.mock("../indexer/redact.js", () => ({
+  redactSecrets: vi.fn((text: string) => text),
+}));
+
+vi.mock("../mastra/tools/get-impact-analysis.js", () => ({
+  executeGetImpactAnalysis: vi.fn().mockResolvedValue({ available: false }),
+}));
+
 vi.mock("../config/env.js", () => ({
   env: { EMBEDDING_DIMENSIONS: 3, RETRIEVAL_CONFIDENCE_THRESHOLD: 0.45 },
 }));
@@ -61,6 +80,7 @@ vi.mock("node:fs/promises", () => ({
 }));
 
 import { readdir, readFile } from "node:fs/promises";
+import { generateText } from "ai";
 import { embedText } from "../indexer/embed.js";
 import { rawQdrant } from "../mastra/infra.js";
 import { isCollectionPopulated } from "../mastra/tools/git-fallback.js";
@@ -716,5 +736,260 @@ describe("RAG tools", () => {
       expect(results).toHaveLength(1);
       expect(results[0].title).toBe("Low Match");
     });
+  });
+});
+
+describe("parseViolations", () => {
+  it("parses a valid JSON array", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    const violations = parseViolations(
+      '[{"rule":"naming","description":"Use camelCase","severity":"warning"}]',
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0].rule).toBe("naming");
+    expect(violations[0].severity).toBe("warning");
+  });
+
+  it("parses JSON from fenced code blocks", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    const text =
+      'Here are the violations:\n```json\n[{"rule":"error-handling","description":"Missing try/catch","severity":"critical"}]\n```';
+    const violations = parseViolations(text);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].rule).toBe("error-handling");
+    expect(violations[0].severity).toBe("critical");
+  });
+
+  it("parses bare JSON arrays from mixed text", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    const text =
+      'Some preamble text [{"rule":"imports","description":"Wrong import order","severity":"info"}] trailing text';
+    const violations = parseViolations(text);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].rule).toBe("imports");
+  });
+
+  it("returns empty array for empty JSON array", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    expect(parseViolations("[]")).toEqual([]);
+  });
+
+  it("returns empty array for unparseable text", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    expect(parseViolations("no JSON here at all")).toEqual([]);
+  });
+
+  it("filters out objects with missing required fields", async () => {
+    const { parseViolations } = await import("../mastra/tools/validate-code.js");
+    const text =
+      '[{"rule":"valid","description":"desc","severity":"info"},{"rule":"missing-severity"}]';
+    const violations = parseViolations(text);
+    expect(violations).toHaveLength(1);
+    expect(violations[0].rule).toBe("valid");
+  });
+});
+
+describe("validateCode", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns validated:false when no standards are indexed", async () => {
+    // searchStandards returns empty when no Qdrant results
+    vi.mocked(rawQdrant.search).mockResolvedValue([]);
+
+    const { executeValidateCode } = await import("../mastra/tools/validate-code.js");
+    const result = await executeValidateCode("const x = 1;", "src/services/UserService.ts");
+
+    expect(result.validated).toBe(false);
+    expect(result.conventionsChecked).toBe(0);
+    expect(result.notice).toContain("No conventions indexed");
+  });
+
+  it("returns validated:true with violations when LLM finds issues", async () => {
+    // Standards search returns results
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.9, {
+        title: "Naming Conventions",
+        category: "backend",
+        text: "Use camelCase for variables",
+        tags: ["naming"],
+      }),
+    ] as never);
+
+    vi.mocked(generateText).mockResolvedValue({
+      text: '[{"rule":"naming","description":"Variable should use camelCase","severity":"warning"}]',
+    } as never);
+
+    const { executeValidateCode } = await import("../mastra/tools/validate-code.js");
+    const result = await executeValidateCode("const MyVar = 1;", "src/services/UserService.ts");
+
+    expect(result.validated).toBe(true);
+    expect(result.pass).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0].rule).toBe("naming");
+    expect(result.conventionsChecked).toBe(1);
+  });
+
+  it("returns validated:true, pass:true when no violations", async () => {
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.9, {
+        title: "Error Handling",
+        category: "backend",
+        text: "Always use try/catch",
+        tags: [],
+      }),
+    ] as never);
+
+    vi.mocked(generateText).mockResolvedValue({
+      text: "[]",
+    } as never);
+
+    const { executeValidateCode } = await import("../mastra/tools/validate-code.js");
+    const result = await executeValidateCode(
+      "try { await fetch() } catch(e) { log(e) }",
+      "src/services/ApiService.ts",
+    );
+
+    expect(result.validated).toBe(true);
+    expect(result.pass).toBe(true);
+    expect(result.violations).toHaveLength(0);
+  });
+
+  it("handles LLM timeout gracefully", async () => {
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.9, {
+        title: "Standards",
+        category: "backend",
+        text: "Some standard",
+        tags: [],
+      }),
+    ] as never);
+
+    vi.mocked(generateText).mockRejectedValue(new Error("AbortError: signal timed out"));
+
+    const { executeValidateCode } = await import("../mastra/tools/validate-code.js");
+    const result = await executeValidateCode("const x = 1;", "src/services/UserService.ts");
+
+    expect(result.validated).toBe(false);
+    expect(result.pass).toBe(true);
+    expect(result.notice).toContain("timed out or errored");
+    expect(result.conventionsChecked).toBe(1);
+  });
+});
+
+describe("getFileContext", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns conventions when scope=conventions", async () => {
+    // searchStandards for conventions lookup
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.9, {
+        title: "Service Layer Rules",
+        category: "backend",
+        text: "Services must handle transactions",
+        tags: ["service"],
+      }),
+    ] as never);
+
+    // Reviews scroll — should not be called with scope=conventions
+    vi.mocked(rawQdrant.scroll as ReturnType<typeof vi.fn>).mockResolvedValue({ points: [] });
+
+    // Patterns list — readdir + readFile for getPattern
+    vi.mocked(readdir).mockResolvedValue(["new-api-endpoint.md"] as never);
+    vi.mocked(readFile).mockResolvedValue("# New API Endpoint\nSteps..." as never);
+
+    const { executeGetFileContext } = await import("../mastra/tools/get-file-context.js");
+    const result = await executeGetFileContext("src/services/PaymentService.ts", "conventions");
+
+    expect(result.filePath).toBe("src/services/PaymentService.ts");
+    expect(result.conventions.length).toBeGreaterThan(0);
+    expect(result.conventions[0].title).toBe("Service Layer Rules");
+    // Reviews and dependents should be empty for scope=conventions
+    expect(result.recentFindings).toHaveLength(0);
+    expect(result.dependents.available).toBe(false);
+  });
+
+  it("returns all sections when scope=all", async () => {
+    // searchStandards
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.85, {
+        title: "Auth Standards",
+        category: "backend",
+        text: "Use JWT for auth",
+        tags: [],
+      }),
+    ] as never);
+
+    // Reviews scroll
+    vi.mocked(rawQdrant.scroll as ReturnType<typeof vi.fn>).mockResolvedValue({
+      points: [
+        {
+          id: "r1",
+          payload: {
+            severity: "warning",
+            text: "Missing error handling",
+            date: "2026-03-01",
+            filePath: "src/services/AuthService.ts",
+          },
+        },
+      ],
+    });
+
+    // Patterns
+    vi.mocked(readdir).mockResolvedValue([] as never);
+
+    const { executeGetFileContext } = await import("../mastra/tools/get-file-context.js");
+    const result = await executeGetFileContext("src/services/AuthService.ts", "all");
+
+    expect(result.filePath).toBe("src/services/AuthService.ts");
+    expect(result.conventions.length).toBeGreaterThan(0);
+    expect(result.recentFindings.length).toBeGreaterThan(0);
+    expect(result.recentFindings[0].severity).toBe("warning");
+    expect(result.recentFindings[0].text).toBe("Missing error handling");
+  });
+
+  it("handles partial failures gracefully — one tool fails, others succeed", async () => {
+    // searchStandards succeeds
+    vi.mocked(rawQdrant.search).mockResolvedValue([
+      qdrantHit(0.9, {
+        title: "Conventions",
+        category: "backend",
+        text: "Always validate input",
+        tags: [],
+      }),
+    ] as never);
+
+    // Reviews scroll throws
+    vi.mocked(rawQdrant.scroll as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Qdrant unavailable"),
+    );
+
+    // Patterns
+    vi.mocked(readdir).mockResolvedValue([] as never);
+
+    const { executeGetFileContext } = await import("../mastra/tools/get-file-context.js");
+    const result = await executeGetFileContext("src/services/OrderService.ts", "all");
+
+    // Conventions should still be populated
+    expect(result.conventions.length).toBeGreaterThan(0);
+    expect(result.conventions[0].title).toBe("Conventions");
+    // Reviews failed but result should still be present and empty
+    expect(result.recentFindings).toHaveLength(0);
+    // Should not throw
+    expect(result.filePath).toBe("src/services/OrderService.ts");
+  });
+
+  it("adds notice for unknown file types", async () => {
+    vi.mocked(rawQdrant.search).mockResolvedValue([]);
+    vi.mocked(rawQdrant.scroll as ReturnType<typeof vi.fn>).mockResolvedValue({ points: [] });
+    vi.mocked(readdir).mockResolvedValue([] as never);
+
+    const { executeGetFileContext } = await import("../mastra/tools/get-file-context.js");
+    const result = await executeGetFileContext("README.md", "all");
+
+    expect(result.notice).toContain("File type not recognised");
   });
 });
