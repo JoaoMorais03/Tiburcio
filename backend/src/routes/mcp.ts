@@ -3,7 +3,7 @@
 //
 // Developer setup:
 //   claude mcp add tiburcio --transport sse \
-//     --url http://localhost:3000/mcp/sse \
+//     --url http://your-server:3333/mcp/sse \
 //     --header "Authorization:Bearer <team-api-key>"
 
 import { timingSafeEqual } from "node:crypto";
@@ -13,13 +13,17 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Hono } from "hono";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { registerTools } from "../mcp-tools.js";
+import { VERSION } from "../config/version.js";
+import { MCP_INSTRUCTIONS, registerTools } from "../mcp-tools.js";
 import { mcpLimiter } from "../middleware/rate-limiter.js";
 
 const mcpRouter = new Hono<{ Bindings: HttpBindings }>();
 
 function createMcpServer(): McpServer {
-  const server = new McpServer({ name: "tiburcio", version: "2.1.0" });
+  const server = new McpServer(
+    { name: "tiburcio", version: VERSION },
+    { instructions: MCP_INSTRUCTIONS },
+  );
   registerTools(server);
   return server;
 }

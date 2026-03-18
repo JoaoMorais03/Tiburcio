@@ -1,6 +1,6 @@
 # Tiburcio — Claude Code Configuration
 
-Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 10 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
+Developer intelligence MCP. Indexes team docs, source code, and conventions into Qdrant, then exposes 12 MCP tools that give Claude Code deep context about your codebase. Nightly pipeline reviews merges against conventions and generates test suggestions. Supports Ollama (local, zero API calls) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.).
 
 ## Philosophy
 
@@ -49,19 +49,24 @@ docker compose ps              # check service health
 
 - **Backend**: Hono HTTP server + Vercel AI SDK v6 + MCP TypeScript SDK + BullMQ jobs
 - **Frontend**: Vue 3 + Vite + Tailwind CSS v4 + Pinia stores
-- **LLM**: Provider-agnostic via `lib/model-provider.ts` — Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter) via `MODEL_PROVIDER` env var
-- **Embeddings**: Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible (`text-embedding-*`, configurable dims) — auto-defaults based on provider
+- **LLM**: Provider-agnostic via `lib/model-provider.ts` — Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter) via `MODEL_PROVIDER` env var. Recommended OpenRouter model: `qwen/qwen3-8b` (open source, zero retention)
+- **Embeddings**: Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible via `INFERENCE_EMBEDDING_MODEL` env var — auto-defaults based on provider. Recommended OpenRouter model: `qwen/qwen3-embedding-8b` (4096 dims, MTEB-Code 80.68)
 - **Ranking**: Qdrant RRF fusion (dense + BM25 reciprocal rank fusion) — no LLM reranking overhead
 - **Vector DB**: Qdrant (6 collections: standards, code-chunks, architecture, schemas, reviews, test-suggestions)
 - **Hybrid Search**: Dense vectors (cosine) + BM25 sparse vectors with RRF fusion on code-chunks
-- **MCP Annotations**: All 10 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
-- **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, summaries). Full mode via `compact: false`.
+- **MCP Annotations**: All 12 tools declare `readOnlyHint: true` + `openWorldHint: false` for Claude Code optimization
+- **Compact Mode**: All tools default to `compact: true` — 300-1,500 tokens per call (3 results, code previews). Full mode via `compact: false`.
+- **Git Fallbacks**: Nightly-dependent tools (`getNightlySummary`, `getChangeSummary`, `searchReviews`, `getTestSuggestions`) fall back to raw `git log` data when Qdrant collections are empty. Responses include `source: "git-log"` field.
 - **Payload Truncation**: Tool outputs cap large text fields (code: 1500, classContext: 800, standards/architecture: 2000 chars) to reduce Claude Code token processing
 - **Database**: PostgreSQL 17 + Drizzle ORM (schema in `backend/src/db/schema.ts`)
 - **Auth**: httpOnly cookie JWT (HS256) + refresh token rotation (Redis-backed revocation) + bcrypt
 - **Indexing**: Per-file pipeline with `p-limit(3)` concurrency — chunk, contextualize, embed, upsert per file. Data appears in Qdrant immediately. ~20-50 min for 558 files.
+- **Observability**: Langfuse (`lib/langfuse.ts`) — lazy singleton, traces MCP tool calls, LLM generations (embeddings, contextualization, nightly review, chat), and background jobs. Activated by setting `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`. `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy.
 - **Streaming**: SSE via `POST /api/chat/stream` (no WebSocket)
 - **MCP**: stdio transport (`backend/src/mcp.ts`) + HTTP/SSE transport (`backend/src/routes/mcp.ts`, Bearer auth via `TEAM_API_KEY`)
+- **MCP Instructions**: Auto-injected tool selection guide via MCP Instructions field in `mcp-tools.ts`
+- **Response Caching**: In-memory TTL cache (`mastra/tools/cache.ts`) — 300s for standards/arch/schemas, 60s for code/reviews
+- **Review Model**: Optional `REVIEW_MODEL` env var + `getReviewModel()` for higher-quality nightly reviews
 
 ## Key Patterns
 
@@ -69,7 +74,7 @@ docker compose ps              # check service health
 All shared singletons live in `backend/src/mastra/infra.ts`: `rawQdrant` (Qdrant client for all vector ops), `ensureCollection()`. Every tool, indexer, and workflow imports from here — never create duplicate clients.
 
 ### Provider-agnostic model layer
-`backend/src/lib/model-provider.ts` exports `getChatModel()` and `getEmbeddingModel()`. Set `MODEL_PROVIDER=ollama` (default) or `MODEL_PROVIDER=openai-compatible` in env. Ollama uses `ollama-ai-provider`. OpenAI-compatible uses `@ai-sdk/openai` createOpenAI (works with vLLM, OpenRouter, LM Studio, etc.). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
+`backend/src/lib/model-provider.ts` exports `getChatModel()`, `getReviewModel()`, and `getEmbeddingModel()`. Set `MODEL_PROVIDER=ollama` (default) or `MODEL_PROVIDER=openai-compatible` in env. Ollama uses `ollama-ai-provider`. OpenAI-compatible uses `@ai-sdk/openai` createOpenAI (works with vLLM, OpenRouter, LM Studio, etc.). Both return standard AI SDK types (`LanguageModelV3`, `EmbeddingModelV3`).
 
 ### One Qdrant client
 - `rawQdrant` — `@qdrant/js-client-rest` `QdrantClient` for all operations: simple search, sparse vectors, hybrid queries (prefetch + RRF), and point retrieval. All 6 collections use `rawQdrant` directly.
@@ -77,7 +82,7 @@ All shared singletons live in `backend/src/mastra/infra.ts`: `rawQdrant` (Qdrant
 ### Embedding layer separation
 `backend/src/indexer/embed.ts` is pure embedding utilities (`embedText`, `embedTexts`, `toUUID`). It does NOT hold qdrant or collection logic. Those belong in `infra.ts`.
 
-### RAG pipeline (v2.1.0)
+### RAG pipeline (v2.2.0)
 1. **AST chunking** — tree-sitter parses Java/TypeScript, regex splits Vue SFC sections then AST-parses `<script>`, SQL stays regex-based
 2. **Contextual retrieval** — LLM generates 2-3 sentence context per chunk before embedding (Anthropic technique, 49% fewer retrieval failures)
 3. **Header chunk linkage** — each chunk stores `headerChunkId` pointing to its file's imports/class declaration chunk
@@ -111,7 +116,8 @@ backend/src/
   config/env.ts          # Zod-validated env vars (envSchema exported for tests)
   config/logger.ts       # Pino logger
   config/redis.ts        # ioredis client
-  lib/model-provider.ts  # getChatModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
+  lib/langfuse.ts        # Langfuse singleton (getLangfuse, shutdownLangfuse, traceToolCall)
+  lib/model-provider.ts  # getChatModel() + getReviewModel() + getEmbeddingModel() — Ollama or OpenAI-compatible
   db/schema.ts           # Drizzle schema (users, conversations, messages)
   db/connection.ts       # postgres driver + drizzle instance
   db/migrate.ts          # Drizzle migrator
@@ -126,7 +132,7 @@ backend/src/
   indexer/git-diff.ts    # git operations (getChangedFiles, getDeletedFiles, getMergeCommits — execFile, never exec)
   indexer/index-*.ts     # indexing pipelines per collection
   mastra/infra.ts        # rawQdrant + ensureCollection (no chatModel/embeddingModel — use lib/model-provider.ts)
-  mastra/tools/          # 10 RAG tools + truncate.ts helper (search-standards, search-code, get-nightly-summary, get-change-summary, get-impact-analysis, etc.)
+  mastra/tools/          # 12 RAG tools + truncate.ts + git-fallback.ts + cache.ts + detect.ts (search-standards, search-code, get-file-context, validate-code, get-impact-analysis, etc.)
   mastra/workflows/      # nightly-review.ts (multi-step orchestration via AI SDK generateText)
   jobs/queue.ts          # BullMQ queue, worker, nightly cron schedule
   middleware/rate-limiter.ts  # global, auth, chat rate limiters
@@ -135,7 +141,7 @@ backend/src/
   routes/admin.ts        # POST /api/admin/reindex (triggers BullMQ jobs)
   routes/mcp.ts          # MCP HTTP/SSE transport (Bearer auth via TEAM_API_KEY)
   server.ts              # Hono app, middleware stack, startup, shutdown
-  mcp.ts                 # MCP stdio server (10 tools via @modelcontextprotocol/sdk)
+  mcp.ts                 # MCP stdio server (12 tools via @modelcontextprotocol/sdk)
 ```
 
 ## Gotchas
@@ -147,11 +153,15 @@ backend/src/
 - **Multi-repo indexing**: All repos index into the same `code-chunks` collection with a `repo` metadata field. Chunk IDs include repo name to prevent cross-repo collisions. Per-repo HEAD SHA tracked in Redis as `tiburcio:codebase-head:{repoName}`.
 - **Qdrant healthcheck**: Uses `bash -c ':> /dev/tcp/localhost/6333'` because the qdrant image has no curl/wget.
 - **Auto-indexing on startup**: Backend checks each Qdrant collection individually and queues missing ones. If you add `CODEBASE_REPOS` later, restart the backend and `code-chunks` will auto-index.
+- **Neo4j auto-build**: After `index-codebase` completes, `buildGraph()` is called automatically when `NEO4J_URI` is configured. No need to wait for the nightly pipeline.
+- **Git fallbacks**: When Qdrant `reviews`/`test-suggestions` collections are empty, nightly-dependent tools fall back to `git log` data from `CODEBASE_REPOS`. Requires repo paths to be accessible at runtime. Fallback responses include `source: "git-log"` and a `notice` field.
+- **Pipeline health tracking**: Nightly pipeline writes `tiburcio:nightly:last-run`, `tiburcio:nightly:last-status`, and `tiburcio:nightly:last-error` to Redis. Exposed in `/api/health` response under `pipeline`.
 - **`.tibignore`**: Place a `.tibignore` file in each repo root to exclude files from indexing. Uses simple glob patterns (one per line, `*` and `?` supported, `#` for comments). Config files, `.env`, Dockerfiles, and infrastructure dirs are blocked by default.
 - **Secret redaction**: `redactSecrets()` in `indexer/redact.ts` strips API keys, connection strings, bearer tokens, AWS keys, and private keys before sending to inference APIs or storing in Qdrant. Applied automatically in `embed.ts`, `index-codebase.ts`, and `nightly-review.ts`.
-- **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:text-embedding-3-small`). Re-indexing is triggered automatically.
-- **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. When using Ollama, no external API keys are needed.
-- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama) or 4096 (openai-compatible) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
+- **Embedding model migration**: Switching `MODEL_PROVIDER` or embedding model auto-drops all Qdrant collections on next startup (dimensions change). Model identifier stored in Redis as `tiburcio:embedding-model` (format: `ollama:nomic-embed-text` or `openai-compatible:qwen/qwen3-embedding-8b`). Re-indexing is triggered automatically.
+- **INFERENCE_* vars conditional**: Only required when `MODEL_PROVIDER=openai-compatible`. Zod `.refine()` validates that `INFERENCE_BASE_URL` and `INFERENCE_MODEL` are both set. `INFERENCE_EMBEDDING_MODEL` sets the embedding model (e.g., `qwen/qwen3-embedding-8b`). When using Ollama, no external API keys are needed.
+- **EMBEDDING_DIMENSIONS auto-detection**: Defaults to 768 (Ollama/nomic-embed-text) or 4096 (openai-compatible/qwen3-embedding-8b) based on `MODEL_PROVIDER`. Can be overridden manually via `EMBEDDING_DIMENSIONS` env var. All `ensureCollection()` calls use this value.
+- **Langfuse is optional**: Backend works without Langfuse env vars — all keys are `z.string().optional()`. When `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, `getLangfuse()` returns a singleton client that traces MCP tool calls, LLM generations, and background jobs. When not set, all tracing is no-op (null checks). `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy. `shutdownLangfuse()` is called on graceful shutdown in both `server.ts` and `mcp.ts`. Docker Compose profile: `docker compose --profile observability up -d`.
 - **Full index stores HEAD SHA**: After `indexCodebase` completes, it saves the git HEAD SHA to Redis so the nightly incremental reindex diffs from the right baseline.
 - **Stale vector cleanup**: The nightly pipeline deletes all vectors for deleted files (via `getDeletedFiles` with `--diff-filter=D`) and purges all line-level vectors for modified files before re-upserting, preventing orphan vectors from removed functions.
 - **BullMQ lock duration**: Worker uses `lockDuration: 300_000` (5 min) and `lockRenewTime: 60_000` (1 min). Default 30s lock causes stalled-job detection during long indexing runs.
@@ -166,7 +176,7 @@ backend/src/
 - **Docker ports bound to localhost**: Infrastructure services (db, redis, qdrant, langfuse) expose ports only to `127.0.0.1`, not to the network. Backend and frontend are the only publicly accessible services.
 - **Security headers**: `secureHeaders()` from `hono/secure-headers` sets X-Content-Type-Options, X-Frame-Options, Referrer-Policy, and HSTS (over HTTPS) on all responses.
 - **MCP HTTP/SSE transport**: Mounted at `/mcp` outside the `/api/*` middleware chain (no cookie auth, no global rate limiter). Uses its own Bearer token auth via `TEAM_API_KEY`. Returns 503 if `TEAM_API_KEY` is not set. Uses `SSEServerTransport` from `@modelcontextprotocol/sdk`.
-- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both use `SSEServerTransport` (HTTP/SSE) and `StdioServerTransport` (stdio) respectively, and call the shared `registerTools(server)` from `src/mcp-tools.ts`. Both expose the same 10 tools.
+- **Two MCP entry points**: `src/mcp.ts` for stdio (local dev, `claude mcp add tiburcio -- npx tsx src/mcp.ts`) and `src/routes/mcp.ts` for HTTP/SSE (team deployment). Both use `SSEServerTransport` (HTTP/SSE) and `StdioServerTransport` (stdio) respectively, and call the shared `registerTools(server)` from `src/mcp-tools.ts`. Both expose the same 12 tools.
 - **AI SDK v6 tools**: Tools use `inputSchema:` (not `parameters:`). Import `z` from `"zod"` (v3), not `"zod/v4"` — AI SDK v6's `FlexibleSchema` requires Zod v3 types. Each tool file exports both `executeFoo()` (standalone async fn) and `fooTool` (AI SDK tool object).
 - **`stopWhen: stepCountIs(N)`**: AI SDK v6 replaced `maxSteps: N` with `stopWhen: stepCountIs(N)` imported from `"ai"`.
 
@@ -190,4 +200,4 @@ Always run `pnpm check && pnpm test` in both backend/ and frontend/ before commi
 
 ## Version
 
-v2.1.0 — consistent across `backend/package.json`, `frontend/package.json`, `backend/src/server.ts`, `backend/src/mcp.ts`.
+v2.3.0 — version defined in `backend/package.json`, read at runtime via `config/version.ts`. All entry points (`server.ts`, `mcp.ts`, `routes/mcp.ts`) import `VERSION` from there.

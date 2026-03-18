@@ -9,6 +9,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./docker/init-db:/docker-entrypoint-initdb.d:ro
     deploy:
       resources:
         limits:
@@ -22,6 +23,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-tiburcio-dev}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -31,7 +33,7 @@ services:
         limits:
           memory: 128M
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-tiburcio-dev}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -56,10 +58,11 @@ services:
 
   langfuse:
     image: langfuse/langfuse:2
+    profiles: ["observability"]
     ports:
       - "127.0.0.1:3001:3000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/langfuse
       NEXTAUTH_URL: http://localhost:3001
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-langfuse-dev-secret}
       SALT: ${LANGFUSE_SALT:-langfuse-dev-salt}
@@ -104,13 +107,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      langfuse:
-        condition: service_started
     env_file:
       - .env
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-tiburcio-dev}@redis:6379
+      QDRANT_URL: http://qdrant:6333
+      NEO4J_URI: bolt://neo4j:7687
+      LANGFUSE_BASE_URL: http://langfuse:3000
     volumes:
       - ./standards:/standards
       - ${CODEBASE_HOST_PATH:-.}:/codebase:ro

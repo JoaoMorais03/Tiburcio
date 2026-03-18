@@ -5,8 +5,9 @@
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { generateText, stepCountIs } from "ai";
+import { generateText, stepCountIs, tool } from "ai";
 import pLimit from "p-limit";
+import { z } from "zod";
 
 import { getRepoConfigs } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
@@ -28,10 +29,11 @@ import {
 import type { ReviewNote } from "../../indexer/index-reviews.js";
 import { indexReviewNotes } from "../../indexer/index-reviews.js";
 import { redactSecrets } from "../../indexer/redact.js";
-import { getChatModel } from "../../lib/model-provider.js";
+import { getLangfuse } from "../../lib/langfuse.js";
+import { getChatModel, getReviewModel } from "../../lib/model-provider.js";
 import { ensureCollection, rawQdrant } from "../infra.js";
-import { searchCodeTool } from "../tools/search-code.js";
-import { searchStandardsTool } from "../tools/search-standards.js";
+import { executeSearchCode } from "../tools/search-code.js";
+import { executeSearchStandards } from "../tools/search-standards.js";
 
 const COLLECTION = "code-chunks";
 const TEST_SUGGESTIONS_COLLECTION = "test-suggestions";
@@ -267,6 +269,27 @@ async function codeReview(): Promise<{
   const allNotes: ReviewNote[] = [];
   const allCommits: Awaited<ReturnType<typeof getMergeCommits>> = [];
 
+  // Defined once outside the commit loop — tool definitions are stateless
+  const reviewTools = {
+    searchStandards: tool({
+      description: "Search team coding conventions and best practices",
+      inputSchema: z.object({
+        query: z.string(),
+        compact: z.boolean().default(false),
+      }),
+      execute: ({ query, compact }) => executeSearchStandards(query, undefined, compact),
+    }),
+    searchCode: tool({
+      description: "Search codebase for existing implementations and patterns",
+      inputSchema: z.object({
+        query: z.string(),
+        compact: z.boolean().default(false),
+      }),
+      execute: ({ query, compact }) =>
+        executeSearchCode(query, undefined, undefined, undefined, compact),
+    }),
+  };
+
   for (const repo of repos) {
     // Try merge commits first, fall back to all commits
     let commits = await getMergeCommits(repo.path, repo.branch);
@@ -282,9 +305,18 @@ async function codeReview(): Promise<{
       const fileDiffs = await getFileDiffs(repo.path, commit.sha, commit.files);
       if (fileDiffs.length === 0) continue;
 
-      const diffSummary = fileDiffs
-        .map((d) => `--- ${d.filePath} ---\n${redactSecrets(d.diff)}`)
-        .join("\n\n");
+      // Cap diff at ~30k tokens (~120k chars) to stay within model context limits.
+      // System prompt + tools schema + metadata use ~8-10k tokens.
+      const MAX_DIFF_CHARS = 120_000;
+      let diffSummary = "";
+      for (const d of fileDiffs) {
+        const entry = `--- ${d.filePath} ---\n${redactSecrets(d.diff)}`;
+        if (diffSummary.length + entry.length > MAX_DIFF_CHARS) {
+          diffSummary += `\n\n[... ${fileDiffs.length - diffSummary.split("---").length / 2} more files truncated — diff too large]`;
+          break;
+        }
+        diffSummary += (diffSummary ? "\n\n" : "") + entry;
+      }
 
       const prompt = `Review this merge commit:
 Repo: ${repo.name}
@@ -297,14 +329,22 @@ Diffs:
 ${diffSummary}`;
 
       try {
+        const langfuse = getLangfuse();
+        const trace = langfuse?.trace({
+          name: "nightly:codeReview",
+          input: { repo: repo.name, commit: commit.sha },
+        });
+        const generation = trace?.generation({
+          name: "codeReview",
+          model: "chat",
+          input: { commitSha: commit.sha, filesChanged: commit.files.length },
+        });
+
         const { text } = await generateText({
-          model: getChatModel(),
+          model: getReviewModel(),
           system: CODE_REVIEW_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
-          tools: {
-            searchStandards: searchStandardsTool,
-            searchCode: searchCodeTool,
-          },
+          tools: reviewTools,
           stopWhen: stepCountIs(5),
           abortSignal: AbortSignal.timeout(120_000),
         });
@@ -329,6 +369,12 @@ ${diffSummary}`;
             logger.warn({ commit: commit.sha }, "Failed to parse review JSON");
             continue;
           }
+        }
+
+        try {
+          generation?.end({ output: { notesCount: notes.length } });
+        } catch {
+          /* observability must never crash nightly pipeline */
         }
 
         for (const note of notes) {
@@ -415,12 +461,29 @@ ${redactedDiff}
 Respond with ONLY a test scaffold — the actual test code a developer would use as a starting point. Use the testing framework appropriate for the language (Vitest for TypeScript, JUnit for Java). Keep it focused and practical.`;
 
       try {
+        const langfuse = getLangfuse();
+        const trace = langfuse?.trace({
+          name: "nightly:testSuggestion",
+          input: { filePath, commitSha: commit.sha },
+        });
+        const generation = trace?.generation({
+          name: "testSuggestion",
+          model: "chat",
+          input: { filePath, language: lang },
+        });
+
         const { text } = await generateText({
           model: getChatModel(),
           system: TEST_SUGGESTION_SYSTEM_PROMPT,
           messages: [{ role: "user", content: prompt }],
           abortSignal: AbortSignal.timeout(120_000),
         });
+
+        try {
+          generation?.end({ output: { hasContent: !!text.trim() } });
+        } catch {
+          /* observability must never crash nightly pipeline */
+        }
 
         if (text.trim()) {
           allSuggestions.push({
@@ -482,9 +545,25 @@ async function buildGraphStep(): Promise<void> {
 // --- Nightly review pipeline ---
 
 export async function runNightlyReview(): Promise<{ suggestions: number }> {
-  await incrementalReindex();
-  const { allCommits } = await codeReview();
-  const { suggestions } = await generateTestSuggestions(allCommits);
-  await buildGraphStep();
-  return { suggestions };
+  try {
+    await incrementalReindex();
+    const { allCommits } = await codeReview();
+    const { suggestions } = await generateTestSuggestions(allCommits);
+    await buildGraphStep();
+
+    // Track pipeline health in Redis
+    await redis.set("tiburcio:nightly:last-run", new Date().toISOString());
+    await redis.set("tiburcio:nightly:last-status", "ok");
+    await redis.del("tiburcio:nightly:last-error");
+
+    return { suggestions };
+  } catch (err) {
+    // Track failure in Redis
+    await redis.set("tiburcio:nightly:last-run", new Date().toISOString()).catch(() => {});
+    await redis.set("tiburcio:nightly:last-status", "failed").catch(() => {});
+    await redis
+      .set("tiburcio:nightly:last-error", err instanceof Error ? err.message : String(err))
+      .catch(() => {});
+    throw err;
+  }
 }

@@ -6,6 +6,12 @@ import { z } from "zod";
 
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
+import {
+  FALLBACK_NOTICE,
+  getGitCommitSummaries,
+  isCollectionPopulated,
+  sinceToHours,
+} from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 import type { SearchResult } from "./types.js";
 
@@ -101,6 +107,30 @@ export async function executeGetChangeSummary(since = "1d", area?: string) {
     });
 
     if (results.length === 0) {
+      // Fall back to git log data when nightly pipeline hasn't run yet
+      const hasData = await isCollectionPopulated(COLLECTION);
+      if (!hasData) {
+        const commits = await getGitCommitSummaries(sinceToHours(since));
+        const filtered = area
+          ? commits.filter((c) => c.message.toLowerCase().includes(area.toLowerCase()))
+          : commits;
+        if (filtered.length > 0) {
+          const authors = [...new Set(filtered.map((c) => c.author))];
+          return {
+            source: "git-log" as const,
+            notice: FALLBACK_NOTICE,
+            summary: `Git activity since ${sinceDate}: ${filtered.length} commit(s) by ${authors.join(", ")}.`,
+            changes: filtered.slice(0, 10).map((c) => ({
+              severity: "info" as const,
+              category: "change-summary" as const,
+              filePath: `${c.filesChanged} file(s)`,
+              text: c.message,
+              author: c.author,
+              date: c.date,
+            })),
+          };
+        }
+      }
       return {
         summary:
           `No review data found since ${sinceDate}. ` +

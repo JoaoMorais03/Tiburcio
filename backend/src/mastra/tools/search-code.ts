@@ -9,6 +9,7 @@ import { logger } from "../../config/logger.js";
 import { textToSparse } from "../../indexer/bm25.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "code-chunks";
@@ -22,12 +23,12 @@ interface QdrantPoint {
 function mapPointToCompact(p: QdrantPoint) {
   const m = (p.payload ?? {}) as Record<string, unknown>;
   const text = (m.text as string) ?? "";
-  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
   return {
     filePath: (m.filePath as string) ?? "unknown",
     symbolName: (m.symbolName as string) ?? null,
     lineRange: `${(m.startLine as number) ?? 0}-${(m.endLine as number) ?? 0}`,
-    summary: truncate(firstLine, 120),
+    layer: (m.layer as string) ?? "other",
+    codePreview: truncate(text, 600),
     score: p.score ?? 0,
   };
 }
@@ -52,6 +53,48 @@ function mapPointToFull(p: QdrantPoint, headerMap: Map<string, string>) {
     classContext: truncate((needsHeader ? headerMap.get(headerChunkId) : null) ?? "", 800),
     score: p.score ?? 0,
   };
+}
+
+function getChunkMeta(p: QdrantPoint) {
+  const m = (p.payload ?? {}) as Record<string, unknown>;
+  return {
+    filePath: (m.filePath as string) ?? "unknown",
+    chunkType: (m.chunkType as string) ?? "other",
+  };
+}
+
+/** Demote and deduplicate header chunks so non-header results win. */
+function filterHeaderChunks(points: QdrantPoint[]): QdrantPoint[] {
+  // Track which files have non-header results and the first header seen per file
+  const filesWithNonHeader = new Set<string>();
+  const firstHeaderPerFile = new Map<string, QdrantPoint>();
+
+  for (const p of points) {
+    const { filePath, chunkType } = getChunkMeta(p);
+    if (chunkType !== "header") {
+      filesWithNonHeader.add(filePath);
+    } else if (!firstHeaderPerFile.has(filePath)) {
+      firstHeaderPerFile.set(filePath, p);
+    }
+  }
+
+  const result: QdrantPoint[] = [];
+  for (const p of points) {
+    const { filePath, chunkType } = getChunkMeta(p);
+    if (chunkType !== "header") {
+      result.push(p);
+      continue;
+    }
+    // Drop header if a non-header result exists for the same file
+    if (filesWithNonHeader.has(filePath)) continue;
+    // Keep only the best header per file (first encountered = highest RRF score)
+    if (firstHeaderPerFile.get(filePath) !== p) continue;
+    // Demote header-only results with 0.5x score multiplier
+    result.push({ ...p, score: (p.score ?? 0) * 0.5 });
+  }
+
+  result.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  return result;
 }
 
 /** Fetch header chunks in a single batch retrieve call. */
@@ -81,6 +124,7 @@ async function fetchHeaders(points: QdrantPoint[]): Promise<Map<string, string>>
   return headerMap;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multiple early returns for cache, thresholds, and compact/full paths
 export async function executeSearchCode(
   query: string,
   repo?: string,
@@ -88,6 +132,11 @@ export async function executeSearchCode(
   layer?: string,
   compact = true,
 ) {
+  const cacheKey = `searchCode:${query}:${repo ?? ""}:${language ?? ""}:${layer ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const t0 = Date.now();
 
   const conditions: Array<{ key: string; match: { value: string } }> = [];
@@ -115,7 +164,7 @@ export async function executeSearchCode(
     });
     const tSearch = Date.now();
 
-    const points = rawResults.points as QdrantPoint[];
+    const points = filterHeaderChunks(rawResults.points as QdrantPoint[]);
 
     if (points.length === 0) {
       logger.info(
@@ -150,7 +199,9 @@ export async function executeSearchCode(
         { query, embed: tEmbed - t0, search: tSearch - tEmbed, total: Date.now() - t0 },
         "searchCode timing (ms)",
       );
-      return { results };
+      const compactResult = { results };
+      cacheSet(cacheKey, compactResult, 60_000);
+      return compactResult;
     }
 
     const headerMap = await fetchHeaders(points);
@@ -169,7 +220,9 @@ export async function executeSearchCode(
       "searchCode timing (ms)",
     );
 
-    return { results };
+    const fullResult = { results };
+    cacheSet(cacheKey, fullResult, 60_000);
+    return fullResult;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {
@@ -224,7 +277,12 @@ export const searchCodeTool = tool({
         "other",
       ])
       .optional()
-      .describe("Filter by architectural layer. For conventions, use searchStandards instead."),
+      .describe(
+        "Filter by architectural layer. Inferred from file path: " +
+          "service=*/services/*, controller=*/routes/*, repository=*/repository/*, " +
+          "model=*/model/*, config=*/config/*, store=*/stores/*, component=*/components/*, " +
+          "batch=*/batch/*. Omit for best results — hybrid search usually finds the right layer.",
+      ),
     compact: z
       .boolean()
       .default(true)

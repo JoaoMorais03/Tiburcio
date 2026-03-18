@@ -33,14 +33,14 @@ pnpm dev  # from root — starts both backend and frontend
 
 Tiburcio operates in two modes:
 
-- **Day mode**: 10 MCP tools serve Claude Code (primary) and the chat UI (secondary). Each tool returns compact, token-efficient answers from Qdrant vector collections.
+- **Day mode**: 12 MCP tools serve Claude Code (primary) and the chat UI (secondary). Each tool returns compact, token-efficient answers from Qdrant vector collections.
 - **Night mode**: BullMQ cron jobs run at 2 AM to re-index changed files, review yesterday's merges against team standards, and generate test suggestions.
 
 Key areas of the codebase:
 - `backend/src/mastra/infra.ts` — Qdrant client singleton + ensureCollection (models via `lib/model-provider.ts`)
-- `backend/src/mcp-tools.ts` — Single source of truth for all 10 MCP tool registrations
+- `backend/src/mcp-tools.ts` — Single source of truth for all 12 MCP tool registrations
 - `backend/src/lib/model-provider.ts` — Provider-agnostic model factory (Ollama or OpenAI-compatible)
-- `backend/src/mastra/tools/` — 10 RAG tools (Qdrant vector search, compact mode default)
+- `backend/src/mastra/tools/` — 12 RAG tools (Qdrant vector search, compact mode default)
 - `backend/src/mastra/workflows/` — Nightly review workflow (multi-step AI SDK orchestration)
 - `backend/src/indexer/` — Code chunking, embedding, indexing pipelines
 - `backend/src/jobs/` — BullMQ background jobs and nightly cron schedule
@@ -94,8 +94,8 @@ Tagging a version (e.g., `v2.2.0`) triggers the release workflow:
 
 To create a release (maintainers only):
 ```bash
-git tag v2.1.0
-git push origin v2.1.0
+git tag v2.3.0
+git push origin v2.3.0
 ```
 
 ## Pull Request Process

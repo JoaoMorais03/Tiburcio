@@ -1,6 +1,15 @@
 {
   "name": "tiburcio-backend",
-  "version": "2.1.0",
+  "version": "2.3.0",
+  "description": "Tiburcio backend — Hono HTTP + MCP server with 12 RAG tools powered by Qdrant",
+  "author": "Joao Morais",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoaoMorais03/tiburcio.git",
+    "directory": "backend"
+  },
+  "keywords": ["mcp", "rag", "qdrant", "hono", "claude-code"],
   "type": "module",
   "engines": {
     "node": ">=22.0.0",
@@ -43,6 +52,7 @@
     "hono-pino": "^0.10.3",
     "hono-rate-limiter": "^0.5.3",
     "ioredis": "^5.9.3",
+    "langfuse": "^3.38.6",
     "neo4j-driver": "^6.0.1",
     "ollama-ai-provider": "^1.2.0",
     "p-limit": "^7.3.0",

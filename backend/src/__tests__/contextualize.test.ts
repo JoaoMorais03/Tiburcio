@@ -7,6 +7,10 @@ vi.mock("../lib/model-provider.js", () => ({
   getEmbeddingModel: () => ({}),
 }));
 
+vi.mock("../lib/langfuse.js", () => ({
+  getLangfuse: () => null,
+}));
+
 vi.mock("../config/logger.js", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));

@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml"><img src="https://github.com/JoaoMorais03/tiburcio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-2.1.0-brightgreen.svg" alt="v2.1.0" /></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-2.3.0-brightgreen.svg" alt="v2.3.0" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.7-blue.svg" alt="TypeScript" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-22-green.svg" alt="Node.js" /></a>
@@ -23,7 +23,7 @@
 
 ---
 
-Tiburcio is an MCP server that gives Claude Code deep context about your codebase. It indexes your standards, architecture docs, source code, and DB schemas into a vector database — then exposes 10 specialized tools that return focused, token-efficient answers. Every night it reviews yesterday's merges against your team's conventions and generates test suggestions.
+Tiburcio is an MCP server that gives Claude Code deep context about your codebase. It indexes your standards, architecture docs, source code, and DB schemas into a vector database — then exposes 12 specialized tools that return focused, token-efficient answers. Every night it reviews yesterday's merges against your team's conventions and generates test suggestions.
 
 **The result**: Claude Code stops guessing and starts answering from your actual codebase.
 
@@ -44,7 +44,7 @@ Developers end up repeating context in every prompt, or Claude Code produces cod
 
 Tiburcio bridges this gap by acting as a **codebase intelligence layer** between Claude Code and your team's knowledge:
 
-- **10 MCP tools** that return compact, focused answers (300-1,500 tokens per call, not 8,000)
+- **12 MCP tools** that return compact, focused answers (300-1,500 tokens per call, not 8,000)
 - **Nightly intelligence** — reviews merges against conventions, generates test scaffolds, flags critical issues
 - **Morning briefings** — "here's what changed overnight, here are the problems"
 - **Convention enforcement** — Claude Code checks standards before writing code
@@ -62,7 +62,7 @@ graph LR
     end
 
     subgraph Tiburcio
-        MCP["MCP Server (10 tools)"]
+        MCP["MCP Server (12 tools)"]
         Agent["AI Agent"]
     end
 
@@ -145,17 +145,24 @@ docker exec ollama ollama pull qwen3:8b
 docker exec ollama ollama pull nomic-embed-text
 ```
 
-### Option B: OpenAI-Compatible Endpoint (vLLM, OpenRouter, etc.)
+### Option B: OpenRouter (no local models, recommended for teams)
 
 ```bash
 git clone https://github.com/JoaoMorais03/tiburcio.git
 cd tiburcio
 cp .env.example .env
-# Edit .env — set MODEL_PROVIDER=openai-compatible, INFERENCE_BASE_URL, INFERENCE_MODEL, INFERENCE_API_KEY
+# Edit .env — fill in your INFERENCE_API_KEY from https://openrouter.ai
+# Defaults: qwen/qwen3-8b (LLM) + qwen/qwen3-embedding-8b (embeddings)
+# MCP-only (no frontend):
+docker compose up db redis qdrant backend -d
+# Full stack (with chat UI):
 docker compose up -d
 ```
 
-Wait for all services to become healthy (`docker compose ps`), then open **http://localhost:5174** for the chat UI. Database migrations run automatically on first boot.
+Wait for all services to become healthy (`docker compose ps`). MCP tools are available immediately. For the chat UI, open **http://localhost:5174**. Database migrations run automatically on first boot.
+
+> **Observability (optional):** To track tool call counts, token usage, and cost per model, start Langfuse:
+> `docker compose --profile observability up -d` — then open http://localhost:3001.
 
 ### Connect Claude Code
 
@@ -173,11 +180,11 @@ Set `TEAM_API_KEY` in your `.env`, then each developer connects:
 ```bash
 claude mcp add tiburcio \
   --transport sse \
-  --url http://your-server:3000/mcp/sse \
+  --url http://your-server:3333/mcp/sse \
   --header "Authorization:Bearer <team-api-key>"
 ```
 
-Claude Code now has 10 specialized tools. Ask it anything about your codebase.
+Claude Code now has 12 specialized tools. Ask it anything about your codebase.
 
 ### Development Mode
 
@@ -193,7 +200,7 @@ cd .. && pnpm dev                 # backend + frontend dev servers
 
 ## MCP Tools
 
-10 tools, each designed to return focused answers (compact mode by default):
+12 tools, each designed to return focused answers (compact mode by default):
 
 | Tool | What It Does | Key Filters |
 |------|-------------|-------------|
@@ -206,6 +213,8 @@ cd .. && pnpm dev                 # backend + frontend dev servers
 | `getPattern` | Code templates (list or get by name) | `name` |
 | `getNightlySummary` | Morning briefing — merges, issues, test gaps | `daysBack` |
 | `getChangeSummary` | "What did I miss?" — grouped by area and severity | `since`: 1d, 7d, 2w · `area` |
+| `getFileContext` | Get development context before modifying a file: conventions, review findings, and dependency info in one call. | `filePath`, `scope` |
+| `validateCode` | Validate a code snippet against team conventions via LLM. Check `validated:true` before trusting `pass:true`. | `code`, `filePath`, `language` |
 | `getImpactAnalysis` | Trace which files/functions/classes depend on a target. Use before refactoring to understand blast radius. Requires Neo4j. | `target`, `targetType`, `depth`, `repo` |
 
 ### Token Efficiency
@@ -263,7 +272,7 @@ pnpm index:architecture
 
 | Layer | Technology |
 |-------|-----------|
-| **MCP Server** | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) (stdio + HTTP/SSE transport, 10 tools) |
+| **MCP Server** | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) (stdio + HTTP/SSE transport, 12 tools) |
 | **Agent/Workflow** | [Vercel AI SDK v6](https://sdk.vercel.ai) (`generateText` with tools) |
 | **LLM** | Ollama (`qwen3:8b`, default) or any OpenAI-compatible endpoint (vLLM, OpenRouter, etc.) via `MODEL_PROVIDER` |
 | **Embeddings** | Ollama (`nomic-embed-text`, 768 dims) or OpenAI-compatible (`text-embedding-*`, configurable dims) |
@@ -274,8 +283,8 @@ pnpm index:architecture
 | **Database** | PostgreSQL 17 + [Drizzle ORM](https://orm.drizzle.team) |
 | **Auth** | httpOnly cookie JWT (HS256) + refresh token rotation + bcrypt |
 | **Jobs** | [BullMQ](https://docs.bullmq.io) + Redis (nightly cron) |
-| **Observability** | Langfuse env vars accepted (`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`) but telemetry instrumentation is not yet active |
-| **Testing** | [Vitest](https://vitest.dev) — 167 tests (137 backend + 30 frontend) |
+| **Observability** | Langfuse (self-hosted) — traces MCP tool calls, LLM generations (chat, embeddings, contextualization, nightly review), and background jobs. Set `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` to activate. |
+| **Testing** | [Vitest](https://vitest.dev) — 171+ tests (141 backend + 30 frontend) |
 
 ### Qdrant Collections
 
@@ -311,7 +320,7 @@ tiburcio/
       indexer/         # Code chunker, embedding, indexing pipelines
       jobs/            # BullMQ background jobs + nightly cron
       mastra/
-        tools/         # 10 RAG tools (Qdrant vector search)
+        tools/         # 12 RAG tools (Qdrant vector search)
         workflows/     # Nightly review workflow
         infra.ts       # Shared singletons (qdrant client, ensureCollection)
       middleware/       # Rate limiters (global, auth, chat)
@@ -394,7 +403,7 @@ All configuration via environment variables. See [`.env.example`](.env.example) 
 
 ### Observability
 
-Langfuse env vars are accepted but telemetry instrumentation is not yet active. Set these for future use when instrumentation lands:
+Langfuse provides full observability for LLM calls, MCP tool invocations, and background jobs. Start Langfuse and set the keys to activate:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -426,12 +435,10 @@ All tests run with mocks — no external services needed.
 
 ## Roadmap
 
-See [`docs/V2_PLAN.md`](docs/V2_PLAN.md) for the active roadmap:
-
 - **Event-Driven Freshness** — webhook-triggered indexing, <10 min freshness guarantee
-- **MCP HTTP/SSE Transport** — shared team deployment, one pod for the whole team
 - **Convention Guardian** — convention scoring, drift tracking, weekly reports
-- **Nightly Intelligence Enhancements** — change summaries, convention drift reports
+- **Multi-tenant support** — per-team Qdrant namespaces
+- **Remote repo cloning** — index repos via git URL without local path
 
 ---
 

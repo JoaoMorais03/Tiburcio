@@ -7,11 +7,17 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "standards";
 
 export async function executeSearchStandards(query: string, category?: string, compact = true) {
+  const cacheKey = `searchStandards:${query}:${category ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const embedding = await embedText(query);
 
   const filter = category ? { must: [{ key: "category", match: { value: category } }] } : undefined;
@@ -38,23 +44,31 @@ export async function executeSearchStandards(query: string, category?: string, c
 
     const threshold = env.RETRIEVAL_CONFIDENCE_THRESHOLD as number;
     const topScore = results[0]?.score ?? 0;
+
+    const mapped = results.map((r) => ({
+      title: (r.payload?.title as string) ?? "Untitled",
+      category: (r.payload?.category as string) ?? "unknown",
+      content: truncate((r.payload?.text as string) ?? "", 2000),
+      tags: (r.payload?.tags as string[]) ?? [],
+      score: r.score ?? 0,
+    }));
+
     if (topScore < threshold) {
       logger.info({ topScore, threshold }, "Results below confidence threshold");
-      return {
-        results: [],
-        message: `No high-confidence results found (best score: ${topScore.toFixed(3)}, threshold: ${threshold}). Try rephrasing the query or using a different tool.`,
+      const lowResult = {
+        results: mapped,
+        lowConfidence: true,
+        notice:
+          `Results have low relevance (best: ${topScore.toFixed(2)}, threshold: ${threshold}). ` +
+          "Consider rephrasing or using searchCode for implementations.",
       };
+      cacheSet(cacheKey, lowResult, 300_000);
+      return lowResult;
     }
 
-    return {
-      results: results.map((r) => ({
-        title: (r.payload?.title as string) ?? "Untitled",
-        category: (r.payload?.category as string) ?? "unknown",
-        content: truncate((r.payload?.text as string) ?? "", 2000),
-        tags: (r.payload?.tags as string[]) ?? [],
-        score: r.score ?? 0,
-      })),
-    };
+    const result = { results: mapped };
+    cacheSet(cacheKey, result, 300_000);
+    return result;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {

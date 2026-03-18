@@ -27,6 +27,11 @@ const baseSchema = z.object({
   INFERENCE_MODEL: z.string().optional(),
   INFERENCE_EMBEDDING_MODEL: z.string().optional(),
 
+  // Optional: override the model used for the nightly review pipeline.
+  // When not set, falls back to the same model as OLLAMA_CHAT_MODEL / INFERENCE_MODEL.
+  // Example: REVIEW_MODEL=qwen/qwen3-32b (larger model for better review quality)
+  REVIEW_MODEL: z.string().optional(),
+
   // Embedding vector dimensions: 768 for nomic-embed-text, 4096 for qwen3-embedding-8b.
   // Must match the chosen embedding model. Auto-defaults based on MODEL_PROVIDER.
   EMBEDDING_DIMENSIONS: z.coerce.number().optional(),
@@ -34,6 +39,7 @@ const baseSchema = z.object({
   LANGFUSE_PUBLIC_KEY: z.string().optional(),
   LANGFUSE_SECRET_KEY: z.string().optional(),
   LANGFUSE_BASE_URL: z.string().optional(),
+  LANGFUSE_RECORD_IO: z.string().optional().default("true"),
 
   // Multi-repo codebase indexing. Format: name:path:branch (comma-separated).
   // Single repo:  CODEBASE_REPOS=myproject:/codebase:develop
@@ -46,7 +52,10 @@ const baseSchema = z.object({
 
   // Bearer token for MCP HTTP/SSE transport authentication.
   // Required when exposing MCP over HTTP for team deployment.
-  TEAM_API_KEY: z.string().optional(),
+  TEAM_API_KEY: z
+    .string()
+    .min(32, "TEAM_API_KEY must be at least 32 characters (use: openssl rand -base64 32)")
+    .optional(),
 
   // Retrieval confidence thresholds — filter low-relevance results before returning to Claude
   RETRIEVAL_CONFIDENCE_THRESHOLD: z.coerce.number().default(0.45),

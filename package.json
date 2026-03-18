@@ -1,5 +1,14 @@
 {
   "name": "tiburcio",
+  "version": "2.3.0",
+  "description": "Developer intelligence MCP server for Claude Code — indexes your codebase, conventions, and review history into a vector database",
+  "author": "Joao Morais",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JoaoMorais03/tiburcio.git"
+  },
+  "keywords": ["mcp", "claude-code", "developer-tools", "rag", "vector-search", "code-intelligence"],
   "private": true,
   "pnpm": {
     "onlyBuiltDependencies": [

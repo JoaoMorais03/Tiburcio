@@ -7,10 +7,34 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
+import { FALLBACK_NOTICE, getGitCommitSummaries, isCollectionPopulated } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "reviews";
 
+async function tryGitFallback() {
+  const hasData = await isCollectionPopulated(COLLECTION);
+  if (hasData) return null;
+
+  const commits = await getGitCommitSummaries(72).catch(() => []);
+  if (commits.length === 0) return null;
+
+  return {
+    source: "git-log" as const,
+    notice: FALLBACK_NOTICE,
+    results: commits.slice(0, 5).map((c) => ({
+      severity: "info" as const,
+      category: "convention" as const,
+      filePath: `${c.filesChanged} file(s)`,
+      summary: c.message,
+      date: c.date,
+      score: 0,
+    })),
+  };
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: multiple filter conditions, cache, fallback, and compact/full paths
 export async function executeSearchReviews(
   query: string,
   severity?: string,
@@ -18,6 +42,11 @@ export async function executeSearchReviews(
   since?: string,
   compact = true,
 ) {
+  const cacheKey = `searchReviews:${query}:${severity ?? ""}:${category ?? ""}:${since ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const embedding = await embedText(query);
 
   const conditions: Array<Record<string, unknown>> = [];
@@ -36,6 +65,8 @@ export async function executeSearchReviews(
     });
 
     if (results.length === 0) {
+      const fallback = await tryGitFallback();
+      if (fallback) return fallback;
       return {
         results: [],
         message:
@@ -56,7 +87,7 @@ export async function executeSearchReviews(
     }
 
     if (compact) {
-      return {
+      const compactReviews = {
         results: results.map((r) => ({
           severity: (r.payload?.severity as string) ?? "info",
           category: (r.payload?.category as string) ?? "unknown",
@@ -66,9 +97,11 @@ export async function executeSearchReviews(
           score: r.score ?? 0,
         })),
       };
+      cacheSet(cacheKey, compactReviews, 60_000);
+      return compactReviews;
     }
 
-    return {
+    const fullReviews = {
       results: results.map((r) => ({
         review: truncate((r.payload?.text as string) ?? ""),
         severity: (r.payload?.severity as string) ?? "info",
@@ -81,6 +114,8 @@ export async function executeSearchReviews(
         score: r.score ?? 0,
       })),
     };
+    cacheSet(cacheKey, fullReviews, 60_000);
+    return fullReviews;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {
@@ -106,7 +141,7 @@ export const searchReviewsTool = tool({
       .optional()
       .describe("Filter by severity level"),
     category: z
-      .enum(["convention", "bug", "security", "pattern", "architecture", "change-summary"])
+      .enum(["convention", "bug", "security", "pattern", "architecture"])
       .optional()
       .describe("Filter by review category"),
     since: z

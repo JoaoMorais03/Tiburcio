@@ -16,11 +16,19 @@ import { pinoLogger } from "hono-pino";
 import { env, getRepoConfigs } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { redis } from "./config/redis.js";
+import { VERSION } from "./config/version.js";
 import { connection, db } from "./db/connection.js";
 import { runMigrations } from "./db/migrate.js";
 import { closeGraphDriver, ensureGraphSchema } from "./graph/client.js";
-import { indexQueue, scheduleNightlyJobs, startIndexWorker } from "./jobs/queue.js";
+import {
+  indexQueue,
+  queueNightlyReview,
+  scheduleNightlyJobs,
+  startIndexWorker,
+} from "./jobs/queue.js";
+import { isLangfuseConfigured, shutdownLangfuse } from "./lib/langfuse.js";
 import { deleteCollection, listCollections, rawQdrant } from "./mastra/infra.js";
+import { csrfProtection } from "./middleware/csrf.js";
 import { authLimiter, chatLimiter, globalLimiter } from "./middleware/rate-limiter.js";
 import adminRouter from "./routes/admin.js";
 import authRouter from "./routes/auth.js";
@@ -38,7 +46,7 @@ app.use(
   cors({
     origin: env.CORS_ORIGINS.split(","),
     allowMethods: ["GET", "POST", "PUT", "DELETE"],
-    allowHeaders: ["Content-Type"],
+    allowHeaders: ["Content-Type", "X-CSRF-Token"],
     credentials: true,
   }),
 );
@@ -68,6 +76,7 @@ app.use("/api/auth/*", authLimiter);
 app.use("/api/chat/*", cookieAuth);
 app.use("/api/chat/*", chatLimiter);
 app.use("/api/admin/*", cookieAuth);
+app.use("/api/*", csrfProtection());
 
 // --- Routes ---
 
@@ -99,19 +108,31 @@ app.get("/api/health", async (c) => {
 
   const healthy = checks.database && checks.redis && checks.qdrant;
 
+  // Pipeline health from Redis (non-blocking)
+  let pipeline: { lastRun: string | null; status: string } = { lastRun: null, status: "never" };
+  try {
+    const [lastRun, lastStatus] = await Promise.all([
+      redis.get("tiburcio:nightly:last-run"),
+      redis.get("tiburcio:nightly:last-status"),
+    ]);
+    pipeline = { lastRun, status: lastStatus ?? "never" };
+  } catch {}
+
   // Only return service status and component availability — no internal
   // technology details (model names, providers, etc.) on a public endpoint.
   return c.json(
     {
       status: healthy ? "ok" : "degraded",
       checks,
+      pipeline,
+      langfuse: isLangfuseConfigured(),
       timestamp: new Date().toISOString(),
     },
     healthy ? 200 : 503,
   );
 });
 
-app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: "2.1.0" }));
+app.get("/", (c) => c.json({ name: "Tiburcio Backend", version: VERSION }));
 
 // --- Startup + Shutdown ---
 
@@ -179,6 +200,13 @@ async function start(): Promise<void> {
         jobId: "init-codebase",
       });
     }
+
+    // Queue nightly review on first boot if reviews/test-suggestions are missing.
+    // Runs after codebase indexing completes (BullMQ concurrency: 1 = sequential).
+    if (!existing.has("reviews") || !existing.has("test-suggestions")) {
+      logger.info("Missing 'reviews'/'test-suggestions' — queuing initial nightly review");
+      await queueNightlyReview("init-nightly-review");
+    }
   } catch (err) {
     logger.warn({ err }, "Could not check Qdrant for auto-indexing");
   }
@@ -197,6 +225,7 @@ async function shutdown(signal: string): Promise<void> {
 
   httpServer?.close();
   await indexWorker?.close().catch(() => {});
+  await shutdownLangfuse().catch(() => {});
   await redis.quit().catch(() => {});
   await connection.end().catch(() => {});
   await closeGraphDriver().catch(() => {});

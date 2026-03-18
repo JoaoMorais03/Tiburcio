@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { embed, embedMany } from "ai";
 
+import { getLangfuse } from "../lib/langfuse.js";
 import { getEmbeddingModel } from "../lib/model-provider.js";
 import type { ASTChunk } from "./ast-chunker.js";
 import { redactSecrets } from "./redact.js";
@@ -43,20 +44,42 @@ export function contentHash(text: string): string {
 
 export async function embedText(text: string): Promise<number[]> {
   const redacted = redactSecrets(text);
+  const langfuse = getLangfuse();
+  const generation = langfuse?.generation({
+    name: "embedText",
+    model: "embedding",
+    input: redacted.slice(0, 200),
+  });
   const { embedding } = await embed({
     model: getEmbeddingModel(),
     value: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });
+  try {
+    generation?.end({ output: { dimensions: embedding.length } });
+  } catch {
+    /* observability must never crash embeddings */
+  }
   return embedding;
 }
 
 export async function embedTexts(texts: string[]): Promise<number[][]> {
   const redacted = texts.map((text) => redactSecrets(text));
+  const langfuse = getLangfuse();
+  const generation = langfuse?.generation({
+    name: "embedTexts",
+    model: "embedding",
+    input: { count: redacted.length },
+  });
   const { embeddings } = await embedMany({
     model: getEmbeddingModel(),
     values: redacted,
     abortSignal: AbortSignal.timeout(60_000),
   });
+  try {
+    generation?.end({ output: { count: embeddings.length, dimensions: embeddings[0]?.length } });
+  } catch {
+    /* observability must never crash embeddings */
+  }
   return embeddings;
 }

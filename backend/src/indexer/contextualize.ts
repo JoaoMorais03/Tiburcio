@@ -7,6 +7,7 @@
 import { generateText } from "ai";
 
 import { logger } from "../config/logger.js";
+import { getLangfuse } from "../lib/langfuse.js";
 import { getChatModel } from "../lib/model-provider.js";
 
 /** Truncate file content to avoid cost explosion on large files. */
@@ -44,6 +45,13 @@ export async function contextualizeChunk(
     .replace("{CHUNK_CONTENT}", chunkContent);
 
   try {
+    const langfuse = getLangfuse();
+    const generation = langfuse?.generation({
+      name: "contextualizeChunk",
+      model: "chat",
+      input: { filePath, chunkLength: chunkContent.length },
+    });
+
     const { text } = await generateText({
       model: getChatModel(),
       prompt,
@@ -51,6 +59,8 @@ export async function contextualizeChunk(
       temperature: 0,
       abortSignal: AbortSignal.timeout(30_000),
     });
+
+    generation?.end({ output: { contextLength: text.trim().length } });
     return text.trim();
   } catch (err) {
     logger.warn({ err, filePath }, "Contextualization failed, using empty context");

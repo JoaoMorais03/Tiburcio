@@ -2,78 +2,17 @@
 // Drops all nodes for each repo and rebuilds using batch UNWIND inserts.
 // Called nightly after Qdrant indexing. Target: <5s for a single monolith.
 
-import { readdir, readFile } from "node:fs/promises";
-import { extname, join, relative } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { RepoConfig } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { findSourceFiles, loadTibignorePatterns } from "../indexer/fs.js";
 import { ensureGraphSchema, isGraphAvailable, runCypher } from "./client.js";
 import { extractGraph, type GraphData } from "./extractor.js";
 
 const BATCH_SIZE = 500;
 const FLUSH_BATCH = 100;
-const SOURCE_EXTENSIONS = new Set([".java", ".ts", ".tsx", ".vue"]);
-// Dotfiles (names starting with ".") are already excluded by the startsWith check in findSourceFiles.
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "target",
-  "build",
-  "dist",
-  "cicd",
-  "docs",
-  "test",
-  "__tests__",
-  "cypress",
-]);
-
-async function loadTibignorePatterns(repoPath: string): Promise<RegExp[]> {
-  try {
-    const content = await readFile(join(repoPath, ".tibignore"), "utf-8");
-    return content
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line && !line.startsWith("#"))
-      .map((pattern) => {
-        const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-        const regex = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
-        return new RegExp(`^${regex}$`);
-      });
-  } catch {
-    return [];
-  }
-}
-
-async function findSourceFiles(
-  dir: string,
-  baseDir: string,
-  tibignorePatterns: RegExp[],
-): Promise<string[]> {
-  const files: string[] = [];
-  let entries: import("node:fs").Dirent[];
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return files;
-  }
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const full = join(dir, entry.name);
-    const relPath = relative(baseDir, full);
-
-    if (tibignorePatterns.some((pattern) => pattern.test(relPath))) {
-      logger.debug({ path: relPath }, "Graph builder: skipped by .tibignore");
-      continue;
-    }
-
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      files.push(...(await findSourceFiles(full, baseDir, tibignorePatterns)));
-    } else if (entry.isFile() && SOURCE_EXTENSIONS.has(extname(entry.name))) {
-      files.push(relative(baseDir, full));
-    }
-  }
-  return files;
-}
 
 async function batchUpsertNodes(nodes: GraphData["nodes"]): Promise<void> {
   for (let i = 0; i < nodes.length; i += BATCH_SIZE) {
@@ -161,7 +100,9 @@ export async function buildGraph(repos: RepoConfig[]): Promise<{ nodes: number; 
       );
     }
 
-    const filePaths = await findSourceFiles(repo.path, repo.path, tibignorePatterns);
+    const filePaths = await findSourceFiles(repo.path, repo.path, tibignorePatterns, {
+      relativePaths: true,
+    });
     const allFilePathsSet = new Set(filePaths);
 
     const allNodes: GraphData["nodes"] = [];

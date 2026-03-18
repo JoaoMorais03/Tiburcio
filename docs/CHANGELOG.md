@@ -4,6 +4,54 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.3.0] — 2026-03-17
+
+### Added
+- **`getFileContext` tool**: One-call context bundle — returns conventions, recent review findings, and dependency info for a file. Replaces calling `searchStandards` + `searchReviews` individually.
+- **`validateCode` tool**: LLM-powered convention checking before commit. Returns `{ validated, pass, violations[] }`. Check `validated:true` before trusting `pass:true`.
+- **MCP Instructions field**: Auto-injected tool selection guide in Claude Code's system prompt via MCP `instructions` property.
+- **Response caching**: In-memory TTL cache (`cache.ts`) — 300s for standards/arch/schemas, 60s for code/reviews. Reduces embedding calls.
+- **`REVIEW_MODEL` env var**: Optional separate model for nightly reviews (e.g., larger model for better quality). Uses `getReviewModel()`.
+- **Tool titles**: All 12 MCP tools now declare human-readable `title` in annotations.
+- **`detect.ts` shared utilities**: `detectLanguage`, `detectLayer`, `isKnownLanguage` extracted into shared module.
+- **CSRF protection**: Double-submit cookie pattern on all cookie-authenticated endpoints.
+
+### Changed
+- **Architecture purity**: `nightly-review.ts` defines inline AI SDK tools (no more dual exports needed for nightly pipeline tools).
+- **12 tools** in both MCP transports (stdio + HTTP/SSE) and web chat (was 10).
+- **`TEAM_API_KEY`** now requires minimum 32 characters when set.
+- **Redis authentication** enabled in Docker Compose by default.
+
+### Fixed
+- **`validateCode` cognitive complexity**: Extracted `parseViolations()` helper to reduce function complexity.
+- **Web chat tool parity**: Added `getFileContext`, `validateCode`, and `getImpactAnalysis` to web chat agent.
+
+---
+
+## [2.2.0] — 2026-03-08
+
+### Added
+- **Langfuse observability**: Traces MCP tool calls, LLM generations, and background jobs. Lazy singleton via `lib/langfuse.ts`. Activated by `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`. `LANGFUSE_RECORD_IO=false` disables input/output recording for privacy.
+- **Git-based fallbacks**: 5 nightly-dependent tools (`searchReviews`, `getTestSuggestions`, `getNightlySummary`, `getChangeSummary`, `getPattern`) now return git history data when Qdrant collections are empty (first boot before nightly runs).
+- **MCP compact mode improvements**: All tools default `compact: true` (300-1,500 tokens). Full mode via `compact: false`.
+- **On-demand nightly**: `POST /api/admin/nightly-review` triggers the nightly pipeline immediately.
+- **8 pattern templates**: `standards/patterns/` directory with ready-to-use scaffolds for common team patterns.
+
+### Changed
+- **MCP HTTP/SSE version** now matches package version (2.2.0).
+- **`isCollectionPopulated`** uses `rawQdrant.count()` instead of `scroll()` for lighter queries.
+- **`getGitCommitSummaries`** processes repos in parallel via `Promise.all`.
+- **`getRecentTestFiles`** uses `Set` for O(1) deduplication.
+- **`sinceToHours`** now correctly parses ISO dates and caps at 90 days.
+
+### Fixed
+- **Langfuse crash safety**: `traceToolCall` wraps all Langfuse calls in try/catch so observability never crashes MCP tools.
+- **Fallback consistency**: `searchReviews` and `getTestSuggestions` now use the same fallback pattern (empty results + `isCollectionPopulated` check) as other nightly tools.
+- **`getNightlySummary` fallback shape**: Fallback response now includes `severityCounts`, `criticalItems`, `warningFiles` with zero/empty defaults to match the normal response shape.
+- **`sinceToHours` silent default**: ISO date inputs no longer silently default to 24 hours.
+
+---
+
 ## [2.1.0] — 2026-03-05
 
 ### Added

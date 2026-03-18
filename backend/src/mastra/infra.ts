@@ -46,6 +46,6 @@ export async function ensureCollection(
     }
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (!msg.includes("already exists")) throw e;
+    if (!msg.includes("already exists") && !msg.includes("Conflict")) throw e;
   }
 }

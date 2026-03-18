@@ -8,7 +8,7 @@ import { logger } from "../config/logger.js";
 import { db } from "../db/connection.js";
 import { users } from "../db/schema.js";
 import type { IndexJobName } from "../jobs/queue.js";
-import { indexQueue } from "../jobs/queue.js";
+import { indexQueue, queueNightlyReview } from "../jobs/queue.js";
 
 const adminRouter = new Hono<{ Variables: JwtVariables }>();
 
@@ -38,6 +38,13 @@ adminRouter.post("/reindex", async (c) => {
   logger.info({ jobIds }, "Enqueued reindex jobs");
 
   return c.json({ queued: jobIds });
+});
+
+adminRouter.post("/nightly-review", async (c) => {
+  const jobId = `nightly-review-${Date.now()}`;
+  await queueNightlyReview(jobId);
+  logger.info({ jobId }, "Admin triggered nightly review");
+  return c.json({ queued: { name: "nightly-review", id: jobId } });
 });
 
 adminRouter.get("/reindex/status", async (c) => {

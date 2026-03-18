@@ -5,9 +5,13 @@ import { Queue, Worker } from "bullmq";
 
 import { env, getRepoConfigs } from "../config/env.js";
 import { logger } from "../config/logger.js";
+import { buildGraph } from "../graph/builder.js";
+import { isGraphAvailable } from "../graph/client.js";
 import { indexArchitecture } from "../indexer/index-architecture.js";
 import { indexCodebase } from "../indexer/index-codebase.js";
 import { indexStandards } from "../indexer/index-standards.js";
+import { getLangfuse } from "../lib/langfuse.js";
+import { cacheClear } from "../mastra/tools/cache.js";
 import { runNightlyReview } from "../mastra/workflows/nightly-review.js";
 
 export type IndexJobName =
@@ -41,6 +45,15 @@ async function runJob(jobName: IndexJobName): Promise<void> {
       if (repos.length === 0) throw new Error("CODEBASE_REPOS not configured");
       for (const repo of repos) {
         await indexCodebase(repo.path, repo.name);
+      }
+      // Auto-build Neo4j graph after indexing (when configured)
+      if (isGraphAvailable()) {
+        try {
+          const { nodes, edges } = await buildGraph(repos);
+          logger.info({ nodes, edges }, "Graph auto-built after codebase indexing");
+        } catch (err) {
+          logger.warn({ err }, "Graph auto-build failed (non-fatal)");
+        }
       }
       break;
     }
@@ -82,12 +95,32 @@ export async function scheduleNightlyJobs(): Promise<void> {
   logger.info("Nightly jobs scheduled (2:00 AM daily)");
 }
 
+/** Queue a one-off nightly review job (used for first-boot and admin triggers). */
+export async function queueNightlyReview(jobId = `nightly-review-${Date.now()}`): Promise<void> {
+  await indexQueue.add("nightly-review", {} as Record<string, never>, { jobId });
+  logger.info({ jobId }, "Queued on-demand nightly review job");
+}
+
 export function startIndexWorker(): Worker<Record<string, never>, void, IndexJobName> {
   const worker = new Worker<Record<string, never>, void, IndexJobName>(
     "indexing",
     async (job) => {
       logger.info({ jobName: job.name, jobId: job.id }, "Starting indexing job");
-      await runJob(job.name);
+      const langfuse = getLangfuse();
+      const trace = langfuse?.trace({
+        name: `job:${job.name}`,
+        metadata: { jobId: job.id, attemptsMade: job.attemptsMade },
+      });
+      try {
+        await runJob(job.name);
+        cacheClear(); // Invalidate in-memory cache after indexing updates data
+        trace?.update({ output: { status: "completed" } });
+      } catch (err) {
+        trace?.update({
+          metadata: { error: err instanceof Error ? err.message : String(err) },
+        });
+        throw err;
+      }
       logger.info({ jobName: job.name, jobId: job.id }, "Indexing job completed");
     },
     {

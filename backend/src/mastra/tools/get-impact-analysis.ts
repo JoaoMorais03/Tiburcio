@@ -2,7 +2,9 @@
 // Returns which files/functions/classes depend on a given target (direct + transitive).
 // Returns { available: false } gracefully when NEO4J_URI is not configured.
 
+import { tool } from "ai";
 import neo4j from "neo4j-driver";
+import { z } from "zod";
 
 import { logger } from "../../config/logger.js";
 import { isGraphAvailable, runCypher } from "../../graph/client.js";
@@ -116,3 +118,18 @@ export async function executeGetImpactAnalysis(
     };
   }
 }
+
+export const getImpactAnalysisTool = tool({
+  description:
+    "Trace dependency impact for a file, function, class, or table using the graph layer. " +
+    "Returns all code that directly or transitively depends on the target. " +
+    "Use before refactoring to understand blast radius.",
+  inputSchema: z.object({
+    target: z.string().describe("File path, function name, class name, or table name"),
+    targetType: z.enum(["file", "function", "class", "table"]),
+    depth: z.number().min(1).max(3).default(2).describe("Traversal depth (1-3)"),
+    repo: z.string().optional().describe("Filter by repo name"),
+  }),
+  execute: ({ target, targetType, depth, repo }) =>
+    executeGetImpactAnalysis(target, targetType, depth, repo),
+});

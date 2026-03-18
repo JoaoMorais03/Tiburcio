@@ -28,7 +28,11 @@ vi.mock("../lib/model-provider.js", () => ({
   getChatModel: vi.fn(() => ({})),
 }));
 
-// Stub all 9 tool modules so they don't pull in Qdrant/embed deps
+vi.mock("../lib/langfuse.js", () => ({
+  getLangfuse: () => null,
+}));
+
+// Stub all 12 tool modules so they don't pull in Qdrant/embed deps
 vi.mock("../mastra/tools/search-standards.js", () => ({
   searchStandardsTool: { description: "stub", parameters: {}, execute: vi.fn() },
 }));
@@ -55,6 +59,15 @@ vi.mock("../mastra/tools/get-nightly-summary.js", () => ({
 }));
 vi.mock("../mastra/tools/get-change-summary.js", () => ({
   getChangeSummaryTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-file-context.js", () => ({
+  getFileContextTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/validate-code.js", () => ({
+  validateCodeTool: { description: "stub", parameters: {}, execute: vi.fn() },
+}));
+vi.mock("../mastra/tools/get-impact-analysis.js", () => ({
+  getImpactAnalysisTool: { description: "stub", parameters: {}, execute: vi.fn() },
 }));
 
 vi.mock("../config/logger.js", () => ({

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { logger } from "../../config/logger.js";
 import { rawQdrant } from "../infra.js";
+import { FALLBACK_NOTICE, getGitCommitSummaries, getRecentTestFiles } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 import type { SearchResult } from "./types.js";
 
@@ -74,6 +75,26 @@ export async function executeGetNightlySummary(daysBack = 1) {
     const recentTests = testSuggestionsResult.points;
 
     if (recentReviews.length === 0 && recentTests.length === 0) {
+      // Fall back to git log data when nightly pipeline hasn't run yet
+      const commits = await getGitCommitSummaries(safeBack * 24);
+      if (commits.length > 0) {
+        const authors = [...new Set(commits.map((c) => c.author))];
+        const totalFiles = commits.reduce((sum, c) => sum + c.filesChanged, 0);
+        const testFiles = await getRecentTestFiles(safeBack * 24);
+        return {
+          source: "git-log" as const,
+          notice: FALLBACK_NOTICE,
+          summary:
+            `Git activity (last ${safeBack} day${safeBack > 1 ? "s" : ""}): ` +
+            `${commits.length} commit(s) by ${authors.join(", ")}. ` +
+            `${totalFiles} file(s) changed.`,
+          severityCounts: { info: 0, warning: 0, critical: 0 },
+          criticalItems: [],
+          warningFiles: [],
+          recentCommits: commits.slice(0, 10),
+          testGaps: testFiles.map((f) => ({ targetFile: f, testType: "unknown" })),
+        };
+      }
       return {
         summary:
           `No nightly intelligence data found for the last ${safeBack} day(s). ` +

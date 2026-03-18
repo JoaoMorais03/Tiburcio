@@ -7,16 +7,24 @@ import { env } from "../../config/env.js";
 import { logger } from "../../config/logger.js";
 import { embedText } from "../../indexer/embed.js";
 import { rawQdrant } from "../infra.js";
+import { cacheGet, cacheSet } from "./cache.js";
+import { FALLBACK_NOTICE, getRecentTestFiles, isCollectionPopulated } from "./git-fallback.js";
 import { truncate } from "./truncate.js";
 
 const COLLECTION = "test-suggestions";
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: search tool with cache, filters, fallback, and threshold logic
 export async function executeGetTestSuggestions(
   query: string,
   language?: string,
   since?: string,
   compact = true,
 ) {
+  const cacheKey = `test-suggestions:${query}:${language ?? ""}:${since ?? ""}:${compact}`;
+  const cached = cacheGet(cacheKey);
+  // biome-ignore lint/suspicious/noExplicitAny: cached result was typed at write time
+  if (cached !== null) return cached as any;
+
   const textToEmbed = [language, query].filter(Boolean).join(" ");
   const embedding = await embedText(textToEmbed);
 
@@ -35,6 +43,25 @@ export async function executeGetTestSuggestions(
     });
 
     if (results.length === 0) {
+      // Fall back to git when collection is empty (nightly hasn't run yet)
+      const hasData = await isCollectionPopulated(COLLECTION);
+      if (!hasData) {
+        const testFiles = await getRecentTestFiles(72).catch(() => [] as string[]);
+        if (testFiles.length > 0) {
+          return {
+            source: "git-log" as const,
+            notice: FALLBACK_NOTICE,
+            results: testFiles.map((f) => ({
+              suggestion: "Recently changed test file — review for coverage gaps.",
+              targetFile: f,
+              testType: "unknown" as const,
+              language: f.endsWith(".ts") ? "typescript" : f.endsWith(".vue") ? "vue" : "unknown",
+              date: new Date().toISOString().split("T")[0],
+              score: 0,
+            })),
+          };
+        }
+      }
       return {
         results: [],
         message:
@@ -54,7 +81,7 @@ export async function executeGetTestSuggestions(
       };
     }
 
-    return {
+    const result = {
       results: results.map((r) => ({
         suggestion: compact
           ? truncate((r.payload?.text as string) ?? "", 200)
@@ -67,6 +94,8 @@ export async function executeGetTestSuggestions(
         score: r.score ?? 0,
       })),
     };
+    cacheSet(cacheKey, result, 60);
+    return result;
   } catch (err) {
     logger.error({ err, collection: COLLECTION }, "Tool query failed");
     return {
